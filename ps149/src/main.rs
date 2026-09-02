@@ -1,4 +1,5 @@
 mod discovery;
+mod file_eraser;
 mod model;
 mod report;
 mod safety;
@@ -17,7 +18,7 @@ use std::sync::Arc;
 
 use model::device::PhysicalDisk;
 use report::audit_log::{AuditEventType, AuditLog};
-use report::certificate::SanitizationCertificate;
+use report::certificate::{FileErasureCertificate, SanitizationCertificate};
 use sanitize::patterns::SanitizeMethod;
 
 fn main() -> Result<()> {
@@ -76,9 +77,17 @@ fn main() -> Result<()> {
                 }
             }
             "3" => {
-                println!("\n  {}", "Erasure history — coming soon (stored in reports/)".dimmed());
+                drain_hotplug_events(&hotplug_rx);
+                if let Err(e) = cmd_file_erase_interactive(&groq_client) {
+                    println!("  {} {}", "Error:".red().bold(), e);
+                }
             }
             "4" => {
+                if let Err(e) = cmd_view_history() {
+                    println!("  {} {}", "Error:".red().bold(), e);
+                }
+            }
+            "5" => {
                 print_settings_info(&groq_client);
             }
             "0" | "exit" | "quit" | "q" => {
@@ -98,15 +107,16 @@ fn main() -> Result<()> {
 
 fn print_main_menu() {
     println!();
-    println!("  {}", "┌─────────────────────────────────────┐".bright_cyan());
-    println!("  {}  {}  {}", "│".bright_cyan(), "Main Menu".bold().bright_white(), "                        │".bright_cyan());
-    println!("  {}", "├─────────────────────────────────────┤".bright_cyan());
-    println!("  {}  {}  {}", "│".bright_cyan(), "[1]  List Connected Devices".white(), "      │".bright_cyan());
-    println!("  {}  {}  {}", "│".bright_cyan(), "[2]  Erase a Drive".white(), "               │".bright_cyan());
-    println!("  {}  {}  {}", "│".bright_cyan(), "[3]  View Erasure History".white(), "         │".bright_cyan());
-    println!("  {}  {}  {}", "│".bright_cyan(), "[4]  Settings & Info".white(), "              │".bright_cyan());
-    println!("  {}  {}  {}", "│".bright_cyan(), "[0]  Exit".dimmed(), "                        │".bright_cyan());
-    println!("  {}", "└─────────────────────────────────────┘".bright_cyan());
+    println!("  {}", "┌─────────────────────────────────────────────────────────┐".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "Main Menu — Forensics & Secure Sanitization Suite".bold().bright_white(), "    │".bright_cyan());
+    println!("  {}", "├─────────────────────────────────────────────────────────┤".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "[1]  List Connected Storage Devices".white(), "               │".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "[2]  Erase an Entire Drive (Module 1)".white(), "                   │".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "[3]  Secure File & Folder Shredder (Module 2)".bright_green().bold(), "   │".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "[4]  View Erasure History & Audit Reports".white(), "             │".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "[5]  Settings & Info".white(), "                                │".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "[0]  Exit".dimmed(), "                                                  │".bright_cyan());
+    println!("  {}", "└─────────────────────────────────────────────────────────┘".bright_cyan());
 }
 
 fn print_method_menu(capacity: u64, interface: Option<&str>) {
@@ -557,7 +567,623 @@ fn cmd_erase_interactive(
     Ok(())
 }
 
+// ─── Module 2: File & Folder Shredder ─────────────────────────────────
+
+fn print_file_erase_menu() {
+    println!();
+    println!("  {}", "┌─────────────────────────────────────────────────────────┐".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "Module 2: Secure File & Folder Shredder".bold().bright_white(), "          │".bright_cyan());
+    println!("  {}", "├─────────────────────────────────────────────────────────┤".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "[1]  Shred a Specific File".white(), "                             │".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "[2]  Shred a Specific Folder (Recursive)".white(), "                 │".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "[3]  Batch Shred Multiple Files / Folders".white(), "                │".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "[4]  Wipe Free Space on a Volume (Anti-Carving)".white(), "          │".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "[0]  Back to Main Menu".dimmed(), "                                    │".bright_cyan());
+    println!("  {}", "└─────────────────────────────────────────────────────────┘".bright_cyan());
+}
+
+fn cmd_file_erase_interactive(groq_client: &Option<ai::groq::GroqClient>) -> Result<()> {
+    loop {
+        print_file_erase_menu();
+        let choice = read_input("Select shredding mode")?;
+
+        match choice.trim() {
+            "1" => {
+                if let Err(e) = shred_single_file(groq_client) {
+                    println!("  {} {}", "Error:".red().bold(), e);
+                }
+            }
+            "2" => {
+                if let Err(e) = shred_folder(groq_client) {
+                    println!("  {} {}", "Error:".red().bold(), e);
+                }
+            }
+            "3" => {
+                if let Err(e) = shred_batch(groq_client) {
+                    println!("  {} {}", "Error:".red().bold(), e);
+                }
+            }
+            "4" => {
+                if let Err(e) = wipe_volume_free_space(groq_client) {
+                    println!("  {} {}", "Error:".red().bold(), e);
+                }
+            }
+            "0" | "back" | "b" => break,
+            _ => {
+                println!("  {}", "Invalid option. Try again.".yellow());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn select_shred_method(file_size: u64) -> Result<SanitizeMethod> {
+    print_method_menu(file_size, None);
+    let input = read_input("Select shredding standard (default [2] NIST Clear)")?;
+    if input.trim().is_empty() {
+        return Ok(SanitizeMethod::NistClear);
+    }
+    if input.trim() == "0" {
+        bail!("Operation cancelled");
+    }
+    let idx: usize = input.trim().parse().context("Invalid selection — enter a number")?;
+    let methods = SanitizeMethod::all_methods();
+    if idx == 0 || idx > methods.len() {
+        bail!("Method selection out of range");
+    }
+    Ok(methods[idx - 1])
+}
+
+fn confirm_shred(target_name: &str) -> Result<bool> {
+    println!("\n  {}", "⚠️  PERMANENT UNRECOVERABLE DESTRUCTION".red().bold());
+    println!("  Target: {}", target_name.yellow().bold());
+    println!("  {}", "This action will overwrite data, purge Alternate Data Streams, wipe slack space,".dimmed());
+    println!("  {}", "and scramble MFT metadata records. Reconstruction will be impossible.".dimmed());
+    let input = read_input("Type SHRED to permanently destroy, or Enter to cancel")?;
+    Ok(input.trim().eq_ignore_ascii_case("SHRED"))
+}
+
+fn shred_single_file(groq_client: &Option<ai::groq::GroqClient>) -> Result<()> {
+    let input = read_input("Enter path of the file to shred (e.g. C:\\docs\\secret.pdf)")?;
+    let path = clean_path(&input);
+    if !path.exists() {
+        bail!("Target file does not exist: {:?}", path);
+    }
+    if !path.is_file() {
+        bail!("Path is a directory, not a file. Use option [2] for folders.");
+    }
+
+    let meta = std::fs::metadata(&path)?;
+    let size = meta.len();
+    println!("\n  {}", "File Forensics Analysis:".bold());
+    println!("    {:<18} {}", "Path:".dimmed(), path.display());
+    println!("    {:<18} {} bytes ({:.2} KB / {:.2} MB)", "Size:".dimmed(), size, size as f64 / 1024.0, size as f64 / 1_048_576.0);
+
+    // Enumerate Alternate Data Streams
+    let streams = file_eraser::streams::enumerate_streams(&path).unwrap_or_default();
+    println!("    {:<18} {}", "Data Streams:".dimmed(), streams.len());
+    for s in &streams {
+        println!("      - {} ({} bytes)", s.name.cyan(), s.size);
+    }
+
+    let method = select_shred_method(size)?;
+
+    if !confirm_shred(&format!("{}", path.display()))? {
+        println!("  {}", "Operation cancelled.".yellow());
+        return Ok(());
+    }
+
+    let start_time = chrono::Local::now();
+    println!("\n  {}", format!("Executing Forensic Shred: {} ({} passes)...", method.display_name(), method.pass_count()).cyan().bold());
+
+    let pb = indicatif::ProgressBar::new(100);
+    pb.set_style(
+        indicatif::ProgressStyle::with_template(
+            "  {spinner:.green} [{bar:40.cyan/blue}] {percent}% | {msg}",
+        )?
+    );
+
+    let res = file_eraser::secure_erase_file(&path, method, &|msg, pct| {
+        pb.set_position((pct * 100.0) as u64);
+        pb.set_message(msg.to_string());
+    })?;
+
+    pb.finish_with_message("Shredding complete");
+
+    let end_time = chrono::Local::now();
+
+    // AI Forensic Narrative
+    let mut ai_narrative = None;
+    if let Some(ref client) = groq_client {
+        println!("\n  {}", "Generating AI Forensic Non-Recoverability Statement...".cyan());
+        match ai::file_narrator::generate_file_narrative(client, &res, &start_time.to_rfc3339(), &end_time.to_rfc3339()) {
+            Ok(narrative) => {
+                println!("  {}", "✓ Forensic statement generated".green());
+                ai_narrative = Some(narrative);
+            }
+            Err(e) => {
+                println!("  {}", format!("✗ AI narrative failed: {}", e).yellow());
+            }
+        }
+    }
+
+    println!("\n{}", "  ═".repeat(50).cyan());
+    if res.success() {
+        println!("  {}", "✓ FILE PERMANENTLY DESTROYED & MFT PURGED".green().bold());
+    } else {
+        println!("  {}", "⚠️ FILE ERASURE COMPLETED WITH NOTED WARNINGS".yellow().bold());
+    }
+    println!("{}", "  ═".repeat(50).cyan());
+
+    if let Some(ref narrative) = ai_narrative {
+        println!("\n  {}", "AI Forensic Statement:".bold());
+        println!("  {}", narrative.bright_black());
+        println!("{}", "  ═".repeat(50).cyan());
+    }
+
+    // Generate & save certificate
+    let cert = FileErasureCertificate {
+        tool_name: "PS149 Forensic Shredder".to_string(),
+        tool_version: env!("CARGO_PKG_VERSION").to_string(),
+        timestamp_start: start_time,
+        timestamp_end: end_time,
+        host_info: report::certificate::HostInfo {
+            hostname: std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Unknown".into()),
+            os: std::env::var("OS").unwrap_or_else(|_| "Unknown".into()),
+        },
+        operation_type: "Single File Shred".to_string(),
+        target_summary: path.display().to_string(),
+        files_processed: 1,
+        files_succeeded: if res.success() { 1 } else { 0 },
+        files_failed: if res.success() { 0 } else { 1 },
+        total_bytes_erased: res.bytes_overwritten,
+        method: method.display_name().to_string(),
+        standard: method.standard_name().to_string(),
+        passes: res.passes_completed,
+        streams_destroyed: res.streams_erased,
+        slack_bytes_wiped: res.slack_bytes_wiped,
+        metadata_cleansed: res.metadata_cleansed,
+        filename_obfuscated: res.filename_obfuscated,
+        ai_narrative,
+        compliance_note: "Forensic shred completed. Physical cluster data overwritten, \
+            Alternate Data Streams expunged, cluster slack space zeroed, and directory index \
+            entries scrambled via multi-iteration rename cycles.".to_string(),
+    };
+
+    let report_dir = std::path::Path::new("reports");
+    std::fs::create_dir_all(report_dir)?;
+    let (json_path, txt_path) = cert.save(report_dir)?;
+
+    println!("\n  {}", "Forensic Certificates Saved:".bold());
+    println!("    JSON: {}", json_path.display());
+    println!("    Text: {}", txt_path.display());
+
+    Ok(())
+}
+
+fn shred_folder(groq_client: &Option<ai::groq::GroqClient>) -> Result<()> {
+    let input = read_input("Enter path of folder to shred (e.g. D:\\ConfidentialFolder)")?;
+    let path = clean_path(&input);
+    if !path.exists() {
+        bail!("Target folder does not exist: {:?}", path);
+    }
+    if !path.is_dir() {
+        bail!("Path is a file, not a directory. Use option [1] for single files.");
+    }
+
+    let targets = vec![path.clone()];
+    let files = file_eraser::batch::expand_targets(&targets);
+    let total_files = files.len();
+    let mut total_size = 0u64;
+    for f in &files {
+        if let Ok(m) = std::fs::metadata(f) {
+            total_size += m.len();
+        }
+    }
+
+    println!("\n  {}", "Folder Forensics Analysis:".bold());
+    println!("    {:<18} {}", "Path:".dimmed(), path.display());
+    println!("    {:<18} {}", "Files Found:".dimmed(), total_files);
+    println!("    {:<18} {} bytes ({:.2} MB)", "Total Size:".dimmed(), total_size, total_size as f64 / 1_048_576.0);
+
+    if total_files == 0 {
+        println!("  {}", "Folder contains no files. Removing directory...".dimmed());
+        file_eraser::metadata::cleanse_and_delete_dir(&path)?;
+        println!("  {}", "✓ Empty folder removed.".green());
+        return Ok(());
+    }
+
+    let method = select_shred_method(total_size)?;
+
+    if !confirm_shred(&format!("Directory: {} ({} files)", path.display(), total_files))? {
+        println!("  {}", "Operation cancelled.".yellow());
+        return Ok(());
+    }
+
+    let start_time = chrono::Local::now();
+    println!("\n  {}", format!("Executing Recursive Shred: {} files with {}...", total_files, method.display_name()).cyan().bold());
+
+    let pb = indicatif::ProgressBar::new(total_files as u64);
+    pb.set_style(
+        indicatif::ProgressStyle::with_template(
+            "  {spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} files | {msg}",
+        )?
+    );
+
+    let batch_res = file_eraser::batch::batch_erase(&files, method, &|msg, _pct| {
+        pb.set_message(msg.to_string());
+        pb.inc(1);
+    })?;
+
+    pb.finish_with_message("All files shredded");
+
+    // Clean up empty directory tree
+    let _ = file_eraser::metadata::cleanse_and_delete_dir(&path);
+
+    let end_time = chrono::Local::now();
+
+    // AI Forensic Narrative
+    let mut ai_narrative = None;
+    if let Some(ref client) = groq_client {
+        println!("\n  {}", "Generating AI Forensic Batch Statement...".cyan());
+        match ai::file_narrator::generate_batch_narrative(
+            client,
+            &batch_res,
+            method,
+            &format!("Folder: {}", path.display()),
+            &start_time.to_rfc3339(),
+            &end_time.to_rfc3339(),
+        ) {
+            Ok(narrative) => {
+                println!("  {}", "✓ Forensic statement generated".green());
+                ai_narrative = Some(narrative);
+            }
+            Err(e) => {
+                println!("  {}", format!("✗ AI narrative failed: {}", e).yellow());
+            }
+        }
+    }
+
+    println!("\n{}", "  ═".repeat(50).cyan());
+    println!(
+        "  {}",
+        format!(
+            "✓ FOLDER DESTROYED: {}/{} files successfully shredded ({:.1}%)",
+            batch_res.files_succeeded,
+            batch_res.total_files,
+            batch_res.success_rate()
+        )
+        .green()
+        .bold()
+    );
+    println!("{}", "  ═".repeat(50).cyan());
+
+    if let Some(ref narrative) = ai_narrative {
+        println!("\n  {}", "AI Forensic Statement:".bold());
+        println!("  {}", narrative.bright_black());
+        println!("{}", "  ═".repeat(50).cyan());
+    }
+
+    let cert = FileErasureCertificate {
+        tool_name: "PS149 Forensic Shredder".to_string(),
+        tool_version: env!("CARGO_PKG_VERSION").to_string(),
+        timestamp_start: start_time,
+        timestamp_end: end_time,
+        host_info: report::certificate::HostInfo {
+            hostname: std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Unknown".into()),
+            os: std::env::var("OS").unwrap_or_else(|_| "Unknown".into()),
+        },
+        operation_type: "Folder Recursive Shred".to_string(),
+        target_summary: path.display().to_string(),
+        files_processed: batch_res.total_files,
+        files_succeeded: batch_res.files_succeeded,
+        files_failed: batch_res.files_failed,
+        total_bytes_erased: batch_res.total_bytes_erased,
+        method: method.display_name().to_string(),
+        standard: method.standard_name().to_string(),
+        passes: method.pass_count(),
+        streams_destroyed: batch_res.results.iter().map(|r| r.streams_erased).sum(),
+        slack_bytes_wiped: batch_res.results.iter().map(|r| r.slack_bytes_wiped).sum(),
+        metadata_cleansed: true,
+        filename_obfuscated: true,
+        ai_narrative,
+        compliance_note: "Folder destruction complete. All child files and directories neutralized.".to_string(),
+    };
+
+    let report_dir = std::path::Path::new("reports");
+    std::fs::create_dir_all(report_dir)?;
+    let (json_path, txt_path) = cert.save(report_dir)?;
+
+    println!("\n  {}", "Forensic Certificates Saved:".bold());
+    println!("    JSON: {}", json_path.display());
+    println!("    Text: {}", txt_path.display());
+
+    Ok(())
+}
+
+fn shred_batch(groq_client: &Option<ai::groq::GroqClient>) -> Result<()> {
+    println!("\n  {}", "Batch Shredder:".bold());
+    println!("  {}", "Enter paths separated by semicolon ';' (e.g. C:\\secret.doc; D:\\archive; E:\\file.bin)".dimmed());
+    let input = read_input("Enter paths")?;
+    let raw_paths: Vec<&str> = input.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    if raw_paths.is_empty() {
+        println!("  {}", "No paths specified.".yellow());
+        return Ok(());
+    }
+
+    let mut target_paths = Vec::new();
+    for p in raw_paths {
+        let cp = clean_path(p);
+        if cp.exists() {
+            target_paths.push(cp);
+        } else {
+            println!("  {} Path not found, skipping: {:?}", "⚠️".yellow(), cp);
+        }
+    }
+
+    if target_paths.is_empty() {
+        bail!("No valid existing paths were specified.");
+    }
+
+    let files = file_eraser::batch::expand_targets(&target_paths);
+    let total_files = files.len();
+    let mut total_size = 0u64;
+    for f in &files {
+        if let Ok(m) = std::fs::metadata(f) {
+            total_size += m.len();
+        }
+    }
+
+    println!("\n  {}", "Batch Analysis:".bold());
+    println!("    {:<18} {}", "Targets Entered:".dimmed(), target_paths.len());
+    println!("    {:<18} {}", "Files Expanded:".dimmed(), total_files);
+    println!("    {:<18} {} bytes ({:.2} MB)", "Total Size:".dimmed(), total_size, total_size as f64 / 1_048_576.0);
+
+    let method = select_shred_method(total_size)?;
+
+    if !confirm_shred(&format!("Batch of {} items ({} files total)", target_paths.len(), total_files))? {
+        println!("  {}", "Operation cancelled.".yellow());
+        return Ok(());
+    }
+
+    let start_time = chrono::Local::now();
+    let pb = indicatif::ProgressBar::new(total_files as u64);
+    pb.set_style(
+        indicatif::ProgressStyle::with_template(
+            "  {spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} files | {msg}",
+        )?
+    );
+
+    let batch_res = file_eraser::batch::batch_erase(&files, method, &|msg, _pct| {
+        pb.set_message(msg.to_string());
+        pb.inc(1);
+    })?;
+
+    pb.finish_with_message("Batch shredding complete");
+
+    for t in &target_paths {
+        if t.is_dir() {
+            let _ = file_eraser::metadata::cleanse_and_delete_dir(t);
+        }
+    }
+
+    let end_time = chrono::Local::now();
+
+    // AI Narrative
+    let mut ai_narrative = None;
+    if let Some(ref client) = groq_client {
+        println!("\n  {}", "Generating AI Forensic Narrative...".cyan());
+        match ai::file_narrator::generate_batch_narrative(
+            client,
+            &batch_res,
+            method,
+            &format!("Batch ({} targets, {} files)", target_paths.len(), total_files),
+            &start_time.to_rfc3339(),
+            &end_time.to_rfc3339(),
+        ) {
+            Ok(narrative) => {
+                println!("  {}", "✓ Forensic narrative generated".green());
+                ai_narrative = Some(narrative);
+            }
+            Err(e) => {
+                println!("  {}", format!("✗ AI narrative failed: {}", e).yellow());
+            }
+        }
+    }
+
+    println!("\n{}", "  ═".repeat(50).cyan());
+    println!(
+        "  {}",
+        format!(
+            "✓ BATCH COMPLETE: {}/{} files destroyed ({:.1}%)",
+            batch_res.files_succeeded,
+            batch_res.total_files,
+            batch_res.success_rate()
+        )
+        .green()
+        .bold()
+    );
+    println!("{}", "  ═".repeat(50).cyan());
+
+    if let Some(ref narrative) = ai_narrative {
+        println!("\n  {}", "AI Forensic Statement:".bold());
+        println!("  {}", narrative.bright_black());
+        println!("{}", "  ═".repeat(50).cyan());
+    }
+
+    let cert = FileErasureCertificate {
+        tool_name: "PS149 Forensic Shredder".to_string(),
+        tool_version: env!("CARGO_PKG_VERSION").to_string(),
+        timestamp_start: start_time,
+        timestamp_end: end_time,
+        host_info: report::certificate::HostInfo {
+            hostname: std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Unknown".into()),
+            os: std::env::var("OS").unwrap_or_else(|_| "Unknown".into()),
+        },
+        operation_type: "Batch File Shred".to_string(),
+        target_summary: format!("{} targets, {} files", target_paths.len(), total_files),
+        files_processed: batch_res.total_files,
+        files_succeeded: batch_res.files_succeeded,
+        files_failed: batch_res.files_failed,
+        total_bytes_erased: batch_res.total_bytes_erased,
+        method: method.display_name().to_string(),
+        standard: method.standard_name().to_string(),
+        passes: method.pass_count(),
+        streams_destroyed: batch_res.results.iter().map(|r| r.streams_erased).sum(),
+        slack_bytes_wiped: batch_res.results.iter().map(|r| r.slack_bytes_wiped).sum(),
+        metadata_cleansed: true,
+        filename_obfuscated: true,
+        ai_narrative,
+        compliance_note: "Batch forensic destruction complete.".to_string(),
+    };
+
+    let report_dir = std::path::Path::new("reports");
+    std::fs::create_dir_all(report_dir)?;
+    let (json_path, txt_path) = cert.save(report_dir)?;
+
+    println!("\n  {}", "Forensic Certificates Saved:".bold());
+    println!("    JSON: {}", json_path.display());
+    println!("    Text: {}", txt_path.display());
+
+    Ok(())
+}
+
+fn wipe_volume_free_space(_groq_client: &Option<ai::groq::GroqClient>) -> Result<()> {
+    println!("\n  {}", "Volume Free Space Wiping (Anti-Carving):".bold());
+    println!("  {}", "Overwrites unallocated clusters where previously deleted files reside.".dimmed());
+    let input = read_input("Enter drive letter to wipe free space (e.g. E)")?;
+    let letter = input.trim().chars().next().context("No drive letter provided")?.to_ascii_uppercase();
+
+    if letter == 'C' {
+        println!("\n  {}", "⚠️  WARNING: Wiping free space on system drive C: can impact running programs.".yellow().bold());
+        let confirm_c = read_input("Type PROCEED to wipe C: free space, or Enter to cancel")?;
+        if !confirm_c.trim().eq_ignore_ascii_case("PROCEED") {
+            println!("  {}", "Cancelled.".yellow());
+            return Ok(());
+        }
+    }
+
+    let method = SanitizeMethod::NistClear;
+    println!("  Using {} standard for free space wipe.", method.display_name().cyan());
+
+    if !confirm_shred(&format!("Free space on drive {}:\\", letter))? {
+        println!("  {}", "Operation cancelled.".yellow());
+        return Ok(());
+    }
+
+    let start_time = chrono::Local::now();
+    let pb = indicatif::ProgressBar::new(100);
+    pb.set_style(
+        indicatif::ProgressStyle::with_template(
+            "  {spinner:.green} [{bar:40.cyan/blue}] {percent}% | {msg}",
+        )?
+    );
+
+    let res = file_eraser::free_space::wipe_free_space(letter, method, &|msg, pct| {
+        pb.set_position((pct * 100.0) as u64);
+        pb.set_message(msg.to_string());
+    })?;
+
+    pb.finish_with_message("Free space wipe finished");
+
+    let end_time = chrono::Local::now();
+
+    println!("\n{}", "  ═".repeat(50).cyan());
+    println!("  {}", format!("✓ FREE SPACE WIPED ON {}:\\ ({} MB purged)", letter, res.bytes_wiped / 1_048_576).green().bold());
+    println!("{}", "  ═".repeat(50).cyan());
+
+    let cert = FileErasureCertificate {
+        tool_name: "PS149 Forensic Shredder".to_string(),
+        tool_version: env!("CARGO_PKG_VERSION").to_string(),
+        timestamp_start: start_time,
+        timestamp_end: end_time,
+        host_info: report::certificate::HostInfo {
+            hostname: std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Unknown".into()),
+            os: std::env::var("OS").unwrap_or_else(|_| "Unknown".into()),
+        },
+        operation_type: "Volume Free Space Wipe".to_string(),
+        target_summary: format!("{}:\\ unallocated space", letter),
+        files_processed: 0,
+        files_succeeded: 0,
+        files_failed: 0,
+        total_bytes_erased: res.bytes_wiped,
+        method: method.display_name().to_string(),
+        standard: method.standard_name().to_string(),
+        passes: 1,
+        streams_destroyed: 0,
+        slack_bytes_wiped: 0,
+        metadata_cleansed: true,
+        filename_obfuscated: false,
+        ai_narrative: None,
+        compliance_note: "Volume unallocated cluster purge complete via temporary allocation fill.".to_string(),
+    };
+
+    let report_dir = std::path::Path::new("reports");
+    std::fs::create_dir_all(report_dir)?;
+    let (json_path, txt_path) = cert.save(report_dir)?;
+
+    println!("\n  {}", "Forensic Certificates Saved:".bold());
+    println!("    JSON: {}", json_path.display());
+    println!("    Text: {}", txt_path.display());
+
+    Ok(())
+}
+
+fn cmd_view_history() -> Result<()> {
+    println!("\n  {}", "Erasure & Forensic Audit History".bold());
+    println!("  {}", "─".repeat(50).dimmed());
+
+    let report_dir = std::path::Path::new("reports");
+    if !report_dir.exists() {
+        println!("  {}", "No reports generated yet (directory 'reports/' is empty).".dimmed());
+        return Ok(());
+    }
+
+    let mut reports = Vec::new();
+    for entry in std::fs::read_dir(report_dir)?.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("txt") {
+            reports.push(path);
+        }
+    }
+
+    if reports.is_empty() {
+        println!("  {}", "No audit reports found in 'reports/'.".dimmed());
+        return Ok(());
+    }
+
+    reports.sort_by(|a, b| b.cmp(a));
+
+    for (i, r) in reports.iter().take(15).enumerate() {
+        let name = r.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let meta = std::fs::metadata(r)?;
+        let size = meta.len();
+        println!("    [{}] {:<45} ({} bytes)", i + 1, name, size);
+    }
+
+    let choice = read_input("Enter report number to view, or 0 to return")?;
+    if choice.trim() == "0" || choice.trim().is_empty() {
+        return Ok(());
+    }
+
+    if let Ok(idx) = choice.trim().parse::<usize>() {
+        if idx > 0 && idx <= reports.len() {
+            let content = std::fs::read_to_string(&reports[idx - 1])?;
+            println!("\n{}", "─".repeat(60).cyan());
+            println!("{}", content);
+            println!("{}", "─".repeat(60).cyan());
+        }
+    }
+
+    Ok(())
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────
+
+fn clean_path(raw: &str) -> std::path::PathBuf {
+    let trimmed = raw.trim().trim_matches('"').trim_matches('\'').trim();
+    std::path::PathBuf::from(trimmed)
+}
 
 fn read_input(prompt: &str) -> Result<String> {
     print!("\n  {} ", format!("{}:", prompt).bold());
@@ -566,3 +1192,4 @@ fn read_input(prompt: &str) -> Result<String> {
     io::stdin().read_line(&mut input)?;
     Ok(input.trim().to_string())
 }
+

@@ -36,10 +36,33 @@ struct Choice {
 }
 
 impl GroqClient {
-    /// Creates a new Groq client from the GROQ_API_KEY environment variable.
+    /// Creates a new Groq client from the GROQ_API_KEY environment variable or .env file.
     /// Returns None if the key isn't set (AI features disabled gracefully).
     pub fn from_env() -> Option<Self> {
-        let api_key = std::env::var("GROQ_API_KEY").ok()?;
+        let api_key = std::env::var("GROQ_API_KEY")
+            .ok()
+            .or_else(|| {
+                // Check .env in current dir
+                if let Ok(content) = std::fs::read_to_string(".env") {
+                    for line in content.lines() {
+                        let trimmed = line.trim();
+                        if let Some(val) = trimmed.strip_prefix("GROQ_API_KEY=") {
+                            return Some(val.trim().trim_matches('"').trim_matches('\'').to_string());
+                        }
+                    }
+                }
+                // Check .env in parent dir
+                if let Ok(content) = std::fs::read_to_string("../.env") {
+                    for line in content.lines() {
+                        let trimmed = line.trim();
+                        if let Some(val) = trimmed.strip_prefix("GROQ_API_KEY=") {
+                            return Some(val.trim().trim_matches('"').trim_matches('\'').to_string());
+                        }
+                    }
+                }
+                None
+            })?;
+
         if api_key.is_empty() {
             return None;
         }

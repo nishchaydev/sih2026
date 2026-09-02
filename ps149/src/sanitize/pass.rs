@@ -76,31 +76,9 @@ pub fn write_pass(
     let threshold_end_sectors = total_sectors.saturating_sub(wipe_margin_sectors);
 
     if is_smart_secure {
-        // SmartSecure: zone-based write strategy
+        // SmartSecure: zone-based write strategy (shared zone definition)
         let bps = bytes_per_sector as u64;
-        let margin_sectors = (128 * 1024 * 1024) / bps; // 128 MB at each end
-        let boundary_sectors = (1024 * 1024) / bps; // 1 MB blocks at GB boundaries
-        let gb_sectors = (1024 * 1024 * 1024) / bps;
-
-        // Build ordered list of (start_sector, count) zones to write
-        let mut zones: Vec<(u64, u64)> = Vec::new();
-
-        // Zone A: First 128 MB (or entire disk if smaller)
-        let head_end = std::cmp::min(margin_sectors, total_sectors);
-        zones.push((0, head_end));
-
-        // Zone B: 1 MB at each GB boundary within the middle
-        let mut boundary = gb_sectors;
-        while boundary + boundary_sectors < total_sectors.saturating_sub(margin_sectors) {
-            zones.push((boundary, boundary_sectors));
-            boundary += gb_sectors;
-        }
-
-        // Zone C: Last 128 MB
-        let tail_start = total_sectors.saturating_sub(margin_sectors);
-        if tail_start > head_end {
-            zones.push((tail_start, total_sectors - tail_start));
-        }
+        let zones = crate::sanitize::patterns::smart_secure_zones(total_sectors, bytes_per_sector);
 
         for (zone_start, zone_count) in &zones {
             seek_to_sector(handle, *zone_start, bytes_per_sector)?;

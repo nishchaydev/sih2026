@@ -51,9 +51,10 @@
    - Intuitive dual-interface architecture (high-throughput CLI + interactive GUI), automated batch processing, and customizable workflows for both technical investigators and non-technical operators.
 
 ### 🏆 Expected Deliverables
-- [x] **Fully Functional Secure Erasure Module** adhering to international sanitization standards (17 methods implemented).
+- [x] **Fully Functional Secure Erasure Module** adhering to international sanitization standards (17 methods implemented — Module 1).
+- [x] **Forensic File & Folder Shredder** with ADS destruction, cluster slack wiping, and MFT obfuscation (Module 2).
 - [ ] **Advanced File Recovery & Carving Engine** capable of reconstructing fragmented and deleted artifacts (Module 3).
-- [x] **Tamper-Resistant Reporting & Auditing** generating JSON/TXT certificates with SHA-256 verification and blockchain audit ledger.
+- [x] **Tamper-Resistant Reporting & Auditing** generating JSON/TXT certificates with SHA-256 verification and AI forensic statements.
 - [x] **Comprehensive Documentation & Architecture Design** including benchmark analysis, setup scripts, and containerized deployment.
 
 ---
@@ -65,9 +66,17 @@ ps149/
 ├── src/
 │   ├── main.rs                    # Interactive 24/7 CLI loop
 │   ├── ai/                        # AI-powered features (Groq LLM)
-│   │   ├── groq.rs                # Groq API client
+│   │   ├── groq.rs                # Groq API client (.env fallback)
 │   │   ├── erasure_advisor.rs     # Pre-erasure AI recommendations
-│   │   └── report_narrator.rs     # Post-erasure forensic narrative
+│   │   ├── report_narrator.rs     # Post-erasure drive forensic narrative
+│   │   └── file_narrator.rs       # Post-shred file forensic statements
+│   ├── file_eraser/               # Module 2: Secure File & Folder Shredder
+│   │   ├── overwrite.rs           # Multi-pass file cluster overwriting
+│   │   ├── streams.rs             # NTFS Alternate Data Stream destruction
+│   │   ├── metadata.rs            # SDelete MFT rename chain & timestamp zeroing
+│   │   ├── slack.rs               # Cluster slack space wiping
+│   │   ├── free_space.rs          # Volume unallocated free space purge
+│   │   └── batch.rs               # Multi-target recursive batch execution
 │   ├── discovery/                 # Device detection & monitoring
 │   │   ├── wmi.rs                 # WMI queries (Win32_DiskDrive, etc.)
 │   │   ├── classifier.rs          # Device type classification
@@ -77,11 +86,12 @@ ps149/
 │   │   ├── device.rs              # PhysicalDisk, Partition, Volume
 │   │   ├── device_type.rs         # 11 device type classifications
 │   │   └── safety_status.rs       # Erasure eligibility rules
-│   ├── sanitize/                  # Core erasure engine
+│   ├── sanitize/                  # Core erasure engine (Module 1)
 │   │   ├── patterns.rs            # 17 erasure standards + fill patterns
 │   │   ├── pass.rs                # Write pass execution (zone-aware)
 │   │   ├── raw_io.rs              # Win32 raw disk I/O (CreateFileW)
-│   │   └── volume_ops.rs          # Volume lock, dismount, guard
+│   │   ├── volume_ops.rs          # Volume lock, dismount, guard
+│   │   └── initialize.rs          # Post-erasure formatting (FAT32/exFAT/NTFS)
 │   ├── verify/                    # Erasure verification
 │   │   ├── readback.rs            # Full readback verification
 │   │   ├── hash.rs                # SHA-256 disk hashing
@@ -90,7 +100,7 @@ ps149/
 │   ├── safety/                    # Safety guards
 │   │   └── confirmation.rs        # Multi-step confirmation flow
 │   ├── report/                    # Forensic reporting
-│   │   ├── certificate.rs         # Sanitization certificate (JSON+TXT)
+│   │   ├── certificate.rs         # Sanitization & Shred certificates (JSON+TXT)
 │   │   └── audit_log.rs           # Timestamped audit trail
 │   └── ui/                        # Terminal UI
 │       ├── progress.rs            # Banner, progress bars
@@ -157,7 +167,51 @@ ps149/
 
 ### File Systems
 All erasure methods work at the **raw sector level** (below the filesystem), so they work regardless of filesystem type:
-- NTFS, FAT32, FAT16, exFAT, ext4, HFS+, APFS, or even unformatted/RAW drives
+- NTFS, FAT32, FAT16, exFAT, ext4, HFS+, APFS, or unformatted/RAW drives
+
+---
+
+## 🗑️ Module 2: Forensic File & Folder Shredder
+
+While Module 1 provides full physical storage media sanitization, **Module 2 provides selective, forensic-grade file and directory shredding** on active volumes without disturbing surrounding files or partition tables.
+
+### 🛡️ 4-Layer Forensic Neutralization Pipeline
+
+```
+Target File/Folder
+      │
+      ▼
+┌────────────────────────────────────────────────────────┐
+│ Phase 1: Alternate Data Stream (ADS) Discovery & Purge │  Enum via FindFirstStreamW/FindNextStreamW
+│          Neutralizes hidden malware/data payloads     │  Overwrites ::$DATA and all custom streams
+└────────────────────────┬───────────────────────────────┘
+                         │
+                         ▼
+┌────────────────────────────────────────────────────────┐
+│ Phase 2: Multi-Pass Pattern Overwriting                │  Hardware-direct I/O (FILE_FLAG_WRITE_THROUGH)
+│          Executes selected standard (NIST, DoD, etc.)  │  Multi-pass sequential cluster overwriting
+└────────────────────────┬───────────────────────────────┘
+                         │
+                         ▼
+┌────────────────────────────────────────────────────────┐
+│ Phase 3: Cluster Slack Space Neutralization            │  Discovers volume cluster size
+│          Wipes residual slack bytes up to boundary     │  Zeros unallocated slack space
+└────────────────────────┬───────────────────────────────┘
+                         │
+                         ▼
+┌────────────────────────────────────────────────────────┐
+│ Phase 4: SDelete-Style MFT Metadata Scrambling         │  Zeros timestamps (1601-01-01 epoch)
+│          Overwrites MFT directory index entries        │  5-pass rename chain (AAAAAA.AAA...)
+│          Permanent File Deletion                       │  DeleteFileW removes sanitized record
+└────────────────────────────────────────────────────────┘
+```
+
+### Key Capabilities:
+- **Single File Forensic Shred**: Selectively destroy individual sensitive documents, databases, or binaries.
+- **Recursive Folder Shred**: Scans and recursively eliminates entire directory structures bottom-up.
+- **Batch Processing**: Semicolon-separated path input (`C:\secret.doc; D:\vault; E:\temp`) with parallel discovery and aggregated audit certification.
+- **Anti-Carving Free Space Purge**: Creates a dynamic allocation envelope that fills the drive to capacity with sanitization patterns, wiping all unallocated clusters and stale MFT records from previously deleted files.
+- **AI Forensic Verification Statements**: Leverages Groq Llama 3.3 70B to generate court-admissible forensic certificates asserting non-recoverability against forensic carvers (Autopsy, FTK, PhotoRec).
 
 ---
 

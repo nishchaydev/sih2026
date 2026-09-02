@@ -210,3 +210,91 @@ impl SanitizationCertificate {
         Ok((json_path, txt_path))
     }
 }
+
+/// Certificate of forensic file & folder destruction (Module 2).
+#[derive(Debug, Serialize)]
+pub struct FileErasureCertificate {
+    pub tool_name: String,
+    pub tool_version: String,
+    pub timestamp_start: DateTime<Local>,
+    pub timestamp_end: DateTime<Local>,
+    pub host_info: HostInfo,
+    pub operation_type: String,
+    pub target_summary: String,
+    pub files_processed: usize,
+    pub files_succeeded: usize,
+    pub files_failed: usize,
+    pub total_bytes_erased: u64,
+    pub method: String,
+    pub standard: String,
+    pub passes: usize,
+    pub streams_destroyed: usize,
+    pub slack_bytes_wiped: u64,
+    pub metadata_cleansed: bool,
+    pub filename_obfuscated: bool,
+    pub ai_narrative: Option<String>,
+    pub compliance_note: String,
+}
+
+impl FileErasureCertificate {
+    pub fn to_json(&self) -> Result<String> {
+        Ok(serde_json::to_string_pretty(self)?)
+    }
+
+    pub fn to_text_summary(&self) -> String {
+        let mut text = String::new();
+        text.push_str("========================================================\n");
+        text.push_str("          FILE SANITIZATION & FORENSIC SHRED CERTIFICATE\n");
+        text.push_str("========================================================\n\n");
+
+        if let Some(narrative) = &self.ai_narrative {
+            text.push_str("[ AI Forensic Narrative ]\n");
+            text.push_str(narrative);
+            text.push_str("\n\n");
+        }
+
+        text.push_str(&format!("Tool: {} v{}\n", self.tool_name, self.tool_version));
+        text.push_str(&format!("Started: {}\n", self.timestamp_start.format("%Y-%m-%d %H:%M:%S")));
+        text.push_str(&format!("Ended:   {}\n", self.timestamp_end.format("%Y-%m-%d %H:%M:%S")));
+
+        text.push_str("\n[ Host System ]\n");
+        text.push_str(&format!("Hostname: {}\n", self.host_info.hostname));
+        text.push_str(&format!("OS: {}\n", self.host_info.os));
+
+        text.push_str("\n[ Operation Details ]\n");
+        text.push_str(&format!("Operation: {}\n", self.operation_type));
+        text.push_str(&format!("Target: {}\n", self.target_summary));
+        text.push_str(&format!("Files Processed: {}\n", self.files_processed));
+        text.push_str(&format!("Files Succeeded: {}\n", self.files_succeeded));
+        text.push_str(&format!("Files Failed: {}\n", self.files_failed));
+        text.push_str(&format!("Total Bytes Erased: {} ({:.2} MB)\n",
+            self.total_bytes_erased, self.total_bytes_erased as f64 / 1_048_576.0));
+
+        text.push_str("\n[ Sanitization Technique ]\n");
+        text.push_str(&format!("Standard: {}\n", self.standard));
+        text.push_str(&format!("Method: {}\n", self.method));
+        text.push_str(&format!("Overwriting Passes: {}\n", self.passes));
+        text.push_str(&format!("NTFS Alternate Data Streams Purged: {}\n", self.streams_destroyed));
+        text.push_str(&format!("Cluster Slack Bytes Wiped: {}\n", self.slack_bytes_wiped));
+        text.push_str(&format!("MFT Metadata Cleansed: {}\n", if self.metadata_cleansed { "YES" } else { "NO" }));
+        text.push_str(&format!("MFT Filename Obfuscated (5-Pass Rename): {}\n", if self.filename_obfuscated { "YES" } else { "NO" }));
+
+        text.push_str("\n[ Compliance Note ]\n");
+        text.push_str(&self.compliance_note);
+        text.push('\n');
+
+        text
+    }
+
+    pub fn save(&self, output_dir: &Path) -> Result<(PathBuf, PathBuf)> {
+        let timestamp = self.timestamp_end.format("%Y%m%d_%H%M%S").to_string();
+
+        let json_path = output_dir.join(format!("file_shred_report_{}.json", timestamp));
+        let txt_path = output_dir.join(format!("file_shred_report_{}.txt", timestamp));
+
+        fs::write(&json_path, self.to_json()?)?;
+        fs::write(&txt_path, self.to_text_summary())?;
+
+        Ok((json_path, txt_path))
+    }
+}

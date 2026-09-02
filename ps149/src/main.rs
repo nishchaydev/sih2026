@@ -519,6 +519,41 @@ fn cmd_erase_interactive(
     println!("    Text: {}", txt_path.display());
     println!("\n{}", cert.to_text_summary());
 
+    // Phase 7: Post-Sanitization Drive Re-initialization & Format (Optional)
+    println!("\n{}", "  ═".repeat(50).cyan());
+    println!("  {}", "Post-Sanitization Options:".bold());
+    println!("  {}", "The drive's partition table has been erased (RAW state).".dimmed());
+    println!("  {}", "Would you like to initialize and format it for immediate reuse?".white());
+    println!();
+    println!("    {} FAT32  — Universal compatibility (Windows, Mac, Linux, TV, Car)", "[1]".bright_green());
+    println!("    {} exFAT  — Modern cross-platform, supports files >4GB", "[2]".cyan());
+    println!("    {} NTFS   — Windows optimized with journaling", "[3]".yellow());
+    println!("    {} Leave as RAW (Forensic unallocated proof)", "[0]".dimmed());
+
+    let post_choice = read_input("Select post-erasure action [1/2/3/0]")?;
+    let target_fs = match post_choice.trim() {
+        "1" => Some(sanitize::initialize::TargetFileSystem::Fat32),
+        "2" => Some(sanitize::initialize::TargetFileSystem::ExFat),
+        "3" => Some(sanitize::initialize::TargetFileSystem::Ntfs),
+        _ => None,
+    };
+
+    if let Some(fs_type) = target_fs {
+        println!("\n  {}", format!("Initializing Disk {} with {}...", target.index, fs_type.as_str().to_uppercase()).cyan());
+        match sanitize::initialize::reinitialize_and_format_disk(target.index, fs_type, "CLEAN_USB") {
+            Ok(res) => {
+                println!("  {}", format!("✓ {}", res.output_summary).bright_green().bold());
+                println!("  {}", "Drive is now clean and immediately ready to use in Windows Explorer!".green());
+            }
+            Err(e) => {
+                println!("  {}", format!("✗ Formatting encountered an issue: {}", e).yellow());
+                println!("  {}", "You can format manually through Windows Disk Management.".dimmed());
+            }
+        }
+    } else {
+        println!("  {}", "Drive left in raw, unpartitioned state for forensic verification.".dimmed());
+    }
+
     Ok(())
 }
 

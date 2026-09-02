@@ -2,6 +2,7 @@ pub mod volume_ops;
 pub mod raw_io;
 pub mod patterns;
 pub mod pass;
+pub mod initialize;
 
 use crate::model::device::PhysicalDisk;
 use patterns::SanitizeMethod;

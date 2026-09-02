@@ -20,18 +20,41 @@
 
 ---
 
-## 📋 Problem Statement
+## 📋 Official Problem Statement (SIH 2026)
 
-> **PS ID:** 26149  
-> **Title:** Design and Development of an Integrated Secure Data Erasure and Advanced File Recovery Tool for Digital Forensics and Data Sanitization  
-> **Organisation:** NTRO (National Technical Research Organisation)  
-> **Theme:** Blockchain & Cybersecurity
+| Field | Detail |
+| :--- | :--- |
+| **Problem Statement ID** | **26149** |
+| **Problem Statement Title** | **Design and Development of an Integrated Secure Data Erasure and Advanced File Recovery Tool for Digital Forensics and Data Sanitization** |
+| **Organization** | **National Technical Research Organisation (NTRO)** |
+| **Theme** | **Blockchain & Cybersecurity** |
+| **Category** | Software |
 
-Organizations, government agencies, law enforcement, and enterprises face two critical challenges:
-1. **Securely destroying** sensitive data to prevent unauthorized recovery
-2. **Recovering deleted** digital evidence during forensic investigations
+### 📖 Background
+> With the rapid growth of digital storage technologies, organizations, government agencies, law enforcement units, enterprises, and individual users face two major challenges: **securely destroying sensitive data** to prevent unauthorized recovery and **recovering deleted digital evidence** during forensic investigations.
+> 
+> Existing solutions generally focus on either secure data deletion or file recovery and often support limited storage technologies and file systems. This forces investigators and cybersecurity professionals to use multiple disparate tools, increasing complexity, operational cost, and inefficiencies. Therefore, there is a pressing need for a **unified platform** that integrates secure data sanitization with advanced forensic-grade file recovery and carving capabilities across diverse storage media and file systems.
 
-Existing solutions focus on either deletion OR recovery, support limited storage technologies, and force professionals to juggle multiple tools. **PS-26149** is a unified platform integrating both capabilities.
+### 🎯 Key Requirements & Scope
+1. **Secure Data Erasure:**
+   - Implementation of global sanitization standards (e.g., DoD 5220.22-M, NIST SP 800-88 Rev. 1, Peter Gutmann, etc.) to permanently destroy sensitive data, ensuring non-recoverability.
+   - Targeted erasure capabilities: complete physical drives, partitions, individual files/folders, and unallocated free space.
+   - Metadata cleansing (NTFS MFT records, `$LogFile`, `$UsnJrnl`) and residual trace removal across multiple file systems (NTFS, FAT32, exFAT, ext4, APFS).
+2. **Advanced File Recovery & Deep Carving:**
+   - Robust file recovery and deep carving using signature-based (magic bytes), structure-based (file header/footer & cluster chains), and intelligent/AI-assisted carving techniques.
+   - Capability to retrieve deleted, corrupted, or fragmented files from formatted, damaged, or raw storage media.
+3. **Broad Device & File System Support:**
+   - Universal compatibility with modern and legacy storage technologies: HDDs, SSDs (with flash wear-leveling and controller over-provisioning considerations), NVMe PCIe, USB flash drives, SD cards, and virtual disk images (VHD/VMDK/RAW).
+4. **Forensic Compliance & Tamper-Resistant Reporting:**
+   - Generation of tamper-resistant erasure certificates with cryptographic audit logs (SHA-256 / blockchain verification) adhering to digital forensics standards (ISO/IEC 27037, NIST).
+5. **Usability and Automation:**
+   - Intuitive dual-interface architecture (high-throughput CLI + interactive GUI), automated batch processing, and customizable workflows for both technical investigators and non-technical operators.
+
+### 🏆 Expected Deliverables
+- [x] **Fully Functional Secure Erasure Module** adhering to international sanitization standards (17 methods implemented).
+- [ ] **Advanced File Recovery & Carving Engine** capable of reconstructing fragmented and deleted artifacts (Module 3).
+- [x] **Tamper-Resistant Reporting & Auditing** generating JSON/TXT certificates with SHA-256 verification and blockchain audit ledger.
+- [x] **Comprehensive Documentation & Architecture Design** including benchmark analysis, setup scripts, and containerized deployment.
 
 ---
 

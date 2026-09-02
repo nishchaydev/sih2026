@@ -1,0 +1,32 @@
+[package]
+name = "ps149"
+version = "0.1.0"
+edition = "2021"
+description = "PS-149: Secure Drive Eraser — NIST SP 800-88 Clear-level disk sanitization tool"
+license = "MIT"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_Security",
+] }
+wmi = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+indicatif = "0.17"
+colored = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+thiserror = "2"
+anyhow = "1"
+rand = "0.8"
+hex = "0.4"
+uuid = { version = "1", features = ["v4"] }
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+ctrlc = "3.4"

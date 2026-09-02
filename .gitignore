@@ -1,0 +1,16 @@
+# Build artifacts
+/ps149/target/
+target/
+*report_*.*
+
+# AG Kit internal
+.ag-kit-backups/
+skills-lock.json
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Environment
+.env

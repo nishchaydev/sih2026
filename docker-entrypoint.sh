@@ -1,0 +1,51 @@
+#!/bin/sh
+set -e
+
+echo ""
+echo "  ╔══════════════════════════════════════════════════════════╗"
+echo "  ║                                                          ║"
+echo "  ║  [*]  PS-26149  Secure Drive Eraser                      ║"
+echo "  ║  v0.1.0  |  NIST SP 800-88 Compliant                     ║"
+echo "  ║  National Technical Research Organisation (NTRO)         ║"
+echo "  ║  SIH 2026 - Blockchain & Cybersecurity Theme             ║"
+echo "  ║                                                          ║"
+echo "  ╚══════════════════════════════════════════════════════════╝"
+echo ""
+echo "  [i] Container Diagnostic & Inspection Environment"
+echo "  --------------------------------------------------------"
+echo "  Storage Engine:    Rust Systems Core (ps149)"
+echo "  Supported Methods: 17 Global Erasure Standards"
+echo "  Device Support:    HDD, SSD, NVMe, USB 2.0/3.0, SD Card"
+echo "  Safety Mechanism:  OS Boot Protection + Multi-Step Verification"
+echo ""
+echo "  [+] Supported Erasure Standards:"
+echo "      [1] Fast Wipe (Headers & Footers - 16MB zones)"
+echo "      [2] Smart Secure Wipe (128MB Zones + 1GB Boundaries - Innovation)"
+echo "      [3] NIST SP 800-88 Clear (Single-pass zero fill)"
+echo "      [4] NIST SP 800-88 Purge (Cryptographic random fill)"
+echo "      [5] Random Single Pass (CSPRNG)"
+echo "      [6] DoD 5220.22-M (3-Pass: 0x00, 0xFF, Random)"
+echo "      [7] DoD 5220.22-M ECE (7-Pass Military)"
+echo "      [8] Peter Gutmann 35-Pass (MFM/RLL Magnetic)"
+echo "      [9-17] AFSSI-5020, AR 380-19, NAVSO, HMG IS5, VSITR, RCMP, Schneier, GOST"
+echo ""
+echo "  --------------------------------------------------------"
+echo "  ⚠️  NOTE FOR MENTORS & EVALUATORS:"
+echo "  This tool interacts directly with physical disk controllers via"
+echo "  Win32 raw I/O (CreateFileW on \\\\.\\PhysicalDriveN) and WMI hardware events."
+echo ""
+echo "  To sanitize real physical drives (e.g. USB flash drives, NVMe):"
+echo "  Run natively on Windows with Administrator privileges:"
+echo "    PowerShell (Admin): .\\setup.ps1"
+echo "    OR download pre-built release binary: ps149.exe"
+echo "  --------------------------------------------------------"
+echo ""
+
+if [ "$1" = "test" ]; then
+    echo "  Running verification and unit test suite..."
+    cargo test
+elif [ "$1" = "bash" ] || [ "$1" = "sh" ]; then
+    exec "$@"
+else
+    echo "  Container inspection complete. For shell access: docker run -it <image> sh"
+fi

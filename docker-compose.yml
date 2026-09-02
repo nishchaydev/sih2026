@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  ps149:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ps149:latest
+    container_name: ps149-forensics
+    stdin_open: true
+    tty: true

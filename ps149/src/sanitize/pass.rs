@@ -35,7 +35,7 @@ pub fn write_pass(
     progress_callback: &impl Fn(SanitizeProgress),
 ) -> anyhow::Result<PassResult> {
     let start_time = Instant::now();
-    let buf_size: u32 = 16_777_216; // 16 MB — large buffer = fewer syscalls = faster
+    let buf_size: u32 = 1_048_576; // 1 MB — optimal for USB/SCSI, responsive progress updates
     let sectors_per_chunk = (buf_size / bytes_per_sector) as u64;
 
     let mut buf = vec![0u8; buf_size as usize];

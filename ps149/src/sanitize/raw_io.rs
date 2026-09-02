@@ -5,8 +5,8 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FlushFileBuffers, SetFilePointerEx, FILE_BEGIN,
-    FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_NO_BUFFERING, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    OPEN_EXISTING,
+    FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 
 pub struct DiskHandle(HANDLE);
@@ -57,8 +57,9 @@ pub fn open_disk_write(disk_index: u32) -> Result<DiskHandle> {
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             None,
             OPEN_EXISTING,
-            // No special flags — let OS pipeline I/O for max throughput
-            FILE_FLAGS_AND_ATTRIBUTES(0),
+            // Direct write-through to prevent Windows OS from buffering gigabytes in RAM
+            // and freezing when the slow USB controller cannot keep up.
+            FILE_FLAGS_AND_ATTRIBUTES(FILE_FLAG_WRITE_THROUGH.0),
             None,
         )
     }?;

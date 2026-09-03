@@ -3,6 +3,24 @@ use serde::Serialize;
 use super::device_type::DeviceType;
 use super::safety_status::SafetyStatus;
 
+/// Physical bus/transport a disk is attached through, as reported by
+/// `IOCTL_STORAGE_QUERY_PROPERTY` (`StorageDeviceProperty`). More
+/// authoritative than the free-text WMI `interface_type` field below —
+/// used to gate hardware-erase capability (see `sanitize::hardware_erase`),
+/// since only internal NVMe drives support a real hardware fast-erase path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[allow(dead_code)]
+pub enum StorageBusType {
+    Nvme,
+    Sata,
+    Ata,
+    Usb,
+    Sas,
+    Scsi,
+    Other,
+    Unknown,
+}
+
 /// A logical volume (drive letter) on a partition.
 #[derive(Debug, Clone, Serialize)]
 pub struct Volume {
@@ -54,6 +72,9 @@ pub struct PhysicalDisk {
     pub media_type: Option<String>,
     /// Interface type: USB, SCSI, IDE, etc.
     pub interface_type: Option<String>,
+    /// Bus type from `IOCTL_STORAGE_QUERY_PROPERTY` — more reliable than
+    /// `interface_type` above. Defaults to `Unknown` if the query fails.
+    pub bus_type: StorageBusType,
     /// PnP device ID (contains USB VID/PID for USB devices).
     pub pnp_device_id: Option<String>,
     /// Bytes per sector (physical).

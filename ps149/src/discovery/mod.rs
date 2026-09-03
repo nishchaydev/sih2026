@@ -105,6 +105,15 @@ pub fn enumerate_devices() -> Result<Vec<PhysicalDisk>> {
             }
         };
 
+        // Best-effort — never fail enumeration over this, just default to Unknown.
+        let bus_type = match ioctl::query_bus_type(disk_index) {
+            Ok(bt) => bt,
+            Err(e) => {
+                warn!("Bus-type query failed for disk {}: {} — defaulting to Unknown", disk_index, e);
+                StorageBusType::Unknown
+            }
+        };
+
         let dev_type = classifier::classify_device(
             disk.media_type.as_deref(),
             disk.interface_type.as_deref(),
@@ -141,6 +150,7 @@ pub fn enumerate_devices() -> Result<Vec<PhysicalDisk>> {
             capacity: disk.size.unwrap_or(0),
             media_type: disk.media_type.clone(),
             interface_type: disk.interface_type.clone(),
+            bus_type,
             pnp_device_id: disk.pnp_device_id.clone(),
             bytes_per_sector: bytes_per_sec,
             total_sectors: total_sec,

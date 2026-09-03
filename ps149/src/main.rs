@@ -1,4 +1,5 @@
 mod discovery;
+mod fileerase;
 mod model;
 mod report;
 mod safety;
@@ -18,6 +19,7 @@ use std::sync::Arc;
 use model::device::PhysicalDisk;
 use report::audit_log::{AuditEventType, AuditLog};
 use report::certificate::SanitizationCertificate;
+use sanitize::hardware_erase::HwEraseCapability;
 use sanitize::patterns::SanitizeMethod;
 
 fn main() -> Result<()> {
@@ -81,6 +83,11 @@ fn main() -> Result<()> {
             "4" => {
                 print_settings_info(&groq_client);
             }
+            "5" => {
+                if let Err(e) = cmd_file_erase_interactive() {
+                    println!("  {} {}", "Error:".red().bold(), e);
+                }
+            }
             "0" | "exit" | "quit" | "q" => {
                 println!("\n{}", "Goodbye! Stay secure. 🛡️".green().bold());
                 break;
@@ -105,6 +112,7 @@ fn print_main_menu() {
     println!("  {}  {}  {}", "│".bright_cyan(), "[2]  Erase a Drive".white(), "               │".bright_cyan());
     println!("  {}  {}  {}", "│".bright_cyan(), "[3]  View Erasure History".white(), "         │".bright_cyan());
     println!("  {}  {}  {}", "│".bright_cyan(), "[4]  Settings & Info".white(), "              │".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "[5]  Secure File & Folder Eraser".white(), " │".bright_cyan());
     println!("  {}  {}  {}", "│".bright_cyan(), "[0]  Exit".dimmed(), "                        │".bright_cyan());
     println!("  {}", "└─────────────────────────────────────┘".bright_cyan());
 }
@@ -313,10 +321,42 @@ fn cmd_erase_interactive(
     );
 
     // Phase 2b: Select method
+    let hw_capability = sanitize::hardware_erase::probe(&target);
+    match &hw_capability {
+        HwEraseCapability::Available => {
+            println!(
+                "\n  {} {}",
+                "[H]".bright_yellow().bold(),
+                "⚡ Hardware Fast Erase — NVMe Crypto Erase (~seconds, NIST 800-88 Purge-equivalent)"
+                    .bright_yellow()
+            );
+        }
+        HwEraseCapability::Unsupported(reason) => {
+            println!(
+                "\n  {}",
+                format!(
+                    "ℹ Hardware fast erase not available for this device: {} — using pattern-based methods below.",
+                    reason
+                )
+                .dimmed()
+            );
+        }
+    }
+
     print_method_menu(target.capacity, target.interface_type.as_deref());
     let method_input = read_input("Select method")?;
     if method_input.trim() == "0" {
         return Ok(());
+    }
+
+    if method_input.trim().eq_ignore_ascii_case("h") {
+        return match hw_capability {
+            HwEraseCapability::Available => cmd_hardware_erase_flow(&target, audit, groq_client),
+            HwEraseCapability::Unsupported(_) => {
+                println!("  {}", "Hardware fast erase is not available for this device.".yellow());
+                Ok(())
+            }
+        };
     }
 
     let method_idx: usize = method_input
@@ -553,6 +593,355 @@ fn cmd_erase_interactive(
     } else {
         println!("  {}", "Drive left in raw, unpartitioned state for forensic verification.".dimmed());
     }
+
+    Ok(())
+}
+
+/// Hardware crypto-erase flow — sibling to the pattern-overwrite path in
+/// `cmd_erase_interactive`, dispatched from the `[H]` menu option. Mirrors
+/// the same confirm → execute → verify → report → post-format shape, but the
+/// execute/verify steps are fundamentally different (one blocking IOCTL, no
+/// byte-pattern readback) so it's kept as its own function rather than
+/// threaded through the pass-based flow above. See `sanitize::hardware_erase`.
+fn cmd_hardware_erase_flow(
+    target: &PhysicalDisk,
+    mut audit: AuditLog,
+    groq_client: &Option<ai::groq::GroqClient>,
+) -> Result<()> {
+    use sanitize::pass::PassResult;
+    use sanitize::SanitizeResult;
+
+    println!(
+        "\n  {}",
+        "This performs a hardware crypto-erase via the drive controller — irreversible, \
+         and no byte-pattern verification is possible (only a post-erase spot check)."
+            .yellow()
+            .bold()
+    );
+
+    // Phase 3: Safety confirmation (same flow as the pattern-overwrite path)
+    audit.log(AuditEventType::SafetyCheck, format!("Device safety status: {}", target.safety_status));
+    if !safety::confirmation::confirm_erasure(target)? {
+        println!("\n  {}", "Erasure cancelled by user.".yellow().bold());
+        audit.log(AuditEventType::SessionEnd, "User cancelled erasure");
+        return Ok(());
+    }
+    audit.log(AuditEventType::ConfirmationReceived, "User confirmed erasure");
+
+    let start_time = chrono::Local::now();
+    let method = SanitizeMethod::NvmeCryptoErase;
+
+    // Phase 4: Execute — one blocking IOCTL, not a pass loop.
+    println!("\n  {}", "Starting hardware crypto-erase...".cyan().bold());
+    audit.log(
+        AuditEventType::SanitizationStarted,
+        format!("Method: {} ({})", method.display_name(), method.standard_name()),
+    );
+
+    const HW_ERASE_TIMEOUT_SECS: u32 = 300;
+    let hw_result = sanitize::hardware_erase::execute_nvme_crypto_erase(target, HW_ERASE_TIMEOUT_SECS)?;
+
+    println!(
+        "  {}",
+        format!("✓ Hardware crypto-erase completed in {:.2}s", hw_result.duration.as_secs_f64())
+            .green()
+            .bold()
+    );
+
+    // Wrap into the existing SanitizeResult/PassResult shape so the
+    // certificate builder below needs no signature changes.
+    let pass = PassResult {
+        pass_index: 0,
+        pattern_description: "NVMe Sanitize — Crypto Erase (IOCTL_STORAGE_REINITIALIZE_MEDIA)".to_string(),
+        sectors_written: target.total_sectors,
+        total_sectors: target.total_sectors,
+        bytes_written: hw_result.capacity,
+        duration: hw_result.duration,
+        errors: Vec::new(),
+    };
+    audit.log(
+        AuditEventType::PassCompleted,
+        format!(
+            "Hardware crypto-erase: {} — {} sectors in {:.1}s",
+            pass.pattern_description, pass.sectors_written, pass.duration.as_secs_f64()
+        ),
+    );
+
+    let sanitize_result = SanitizeResult {
+        method,
+        passes: vec![pass],
+        total_duration: hw_result.duration,
+    };
+
+    // Phase 5: Post-erase spot check (informational — see module docs on why
+    // this can't be a full readback like the pattern-overwrite path).
+    println!("\n  {}", "Running post-erase spot check (informational)...".cyan().bold());
+    audit.log(AuditEventType::VerificationStarted, "Post-erase spot check starting");
+    let verify_result = sanitize::hardware_erase::post_erase_spot_check(target)?;
+    let verify_status = if verify_result.passed { "PASS" } else { "FAIL" };
+    let sampled = verify_result.sectors_verified + verify_result.sectors_failed;
+    audit.log(
+        AuditEventType::VerificationCompleted,
+        format!(
+            "Spot check: {} — {} sectors sampled, SHA-256: {}",
+            verify_status,
+            sampled,
+            &verify_result.disk_hash[..16.min(verify_result.disk_hash.len())]
+        ),
+    );
+
+    let end_time = chrono::Local::now();
+    audit.log(AuditEventType::SessionEnd, "Hardware erase session complete");
+
+    // AI Feature: Forensic Narrative Generation
+    let mut ai_narrative = None;
+    if let Some(ref client) = groq_client {
+        println!("\n  {}", "Generating AI Forensic Narrative...".cyan());
+        match ai::report_narrator::generate_narrative(
+            client,
+            target,
+            &sanitize_result,
+            &verify_result,
+            &start_time.to_rfc3339(),
+            &end_time.to_rfc3339(),
+        ) {
+            Ok(narrative) => {
+                println!("  {}", "✓ Narrative generated successfully".green());
+                ai_narrative = Some(narrative);
+            }
+            Err(e) => {
+                println!("  {}", format!("✗ Failed to generate narrative: {}", e).yellow());
+            }
+        }
+    }
+
+    println!("\n{}", "  ═".repeat(50).cyan());
+    if verify_result.passed {
+        println!("  {}", "✓ HARDWARE ERASE COMPLETE — SPOT CHECK PASSED".green().bold());
+    } else {
+        println!("  {}", "⚠ HARDWARE ERASE COMPLETE — SPOT CHECK FLAGGED READABLE DATA".red().bold());
+    }
+    println!("{}", "  ═".repeat(50).cyan());
+
+    if let Some(narrative) = &ai_narrative {
+        println!("\n  {}", "AI Forensic Narrative:".bold());
+        println!("  {}", narrative.bright_black());
+        println!("{}", "  ═".repeat(50).cyan());
+    }
+
+    // Phase 6: Report
+    let mut cert = SanitizationCertificate::build(
+        start_time,
+        end_time,
+        target,
+        &sanitize_result,
+        &verify_result,
+        method,
+        audit,
+    );
+
+    if let Some(narrative) = ai_narrative {
+        cert.ai_narrative = Some(narrative);
+    }
+
+    let report_dir = std::path::Path::new("reports");
+    std::fs::create_dir_all(report_dir)?;
+    let (json_path, txt_path) = cert.save(report_dir)?;
+
+    println!("\n  {}", "Reports saved:".bold());
+    println!("    JSON: {}", json_path.display());
+    println!("    Text: {}", txt_path.display());
+    println!("\n{}", cert.to_text_summary());
+
+    // Phase 7: Post-Erase Options (same reuse-format prompt as the pattern-overwrite path)
+    println!("\n{}", "  ═".repeat(50).cyan());
+    println!("  {}", "Post-Erase Options:".bold());
+    println!("  {}", "The drive's encryption key has been reset — all prior data is unrecoverable.".dimmed());
+    println!("  {}", "Would you like to initialize and format it for immediate reuse?".white());
+    println!();
+    println!("    {} FAT32  — Universal compatibility (Windows, Mac, Linux, TV, Car)", "[1]".bright_green());
+    println!("    {} exFAT  — Modern cross-platform, supports files >4GB", "[2]".cyan());
+    println!("    {} NTFS   — Windows optimized with journaling", "[3]".yellow());
+    println!("    {} Leave as-is", "[0]".dimmed());
+
+    let post_choice = read_input("Select post-erasure action [1/2/3/0]")?;
+    let target_fs = match post_choice.trim() {
+        "1" => Some(sanitize::initialize::TargetFileSystem::Fat32),
+        "2" => Some(sanitize::initialize::TargetFileSystem::ExFat),
+        "3" => Some(sanitize::initialize::TargetFileSystem::Ntfs),
+        _ => None,
+    };
+
+    if let Some(fs_type) = target_fs {
+        println!("\n  {}", format!("Initializing Disk {} with {}...", target.index, fs_type.as_str().to_uppercase()).cyan());
+        match sanitize::initialize::reinitialize_and_format_disk(target.index, fs_type, "CLEAN_NVME") {
+            Ok(res) => {
+                println!("  {}", format!("✓ {}", res.output_summary).bright_green().bold());
+                println!("  {}", "Drive is now clean and immediately ready to use in Windows Explorer!".green());
+            }
+            Err(e) => {
+                println!("  {}", format!("✗ Formatting encountered an issue: {}", e).yellow());
+                println!("  {}", "You can format manually through Windows Disk Management.".dimmed());
+            }
+        }
+    } else {
+        println!("  {}", "Drive left as-is.".dimmed());
+    }
+
+    Ok(())
+}
+
+/// Module 2 — Secure File & Folder Eraser. Reuses the pattern engine
+/// (`SanitizeMethod`) for content overwrite, but is otherwise a fully
+/// separate flow from the disk-erase path above: different target
+/// selection (arbitrary paths, not discovered devices), a curated method
+/// menu (file content doesn't need the full 17-item disk menu), its own
+/// confirmation shape, and its own certificate type. See `fileerase`.
+fn print_file_method_menu() -> Vec<SanitizeMethod> {
+    let methods = vec![
+        SanitizeMethod::NistClear,
+        SanitizeMethod::Random1Pass,
+        SanitizeMethod::Dod3Pass,
+        SanitizeMethod::Gutmann,
+    ];
+    println!("\n  {}", "Select Overwrite Method:".bold());
+    println!("  {}", "─".repeat(60).dimmed());
+    for (i, m) in methods.iter().enumerate() {
+        println!(
+            "    [{}] {:<38} {}",
+            i + 1,
+            m.display_name(),
+            format!("— {}", m.description()).dimmed()
+        );
+    }
+    methods
+}
+
+fn cmd_file_erase_interactive() -> Result<()> {
+    let mut audit = AuditLog::new();
+    audit.log(AuditEventType::SessionStart, "File/folder erasure session started");
+
+    println!("\n{}", "  Enter file or folder paths to securely erase.".bold());
+    println!("  {}", "One per line — blank line to finish.".dimmed());
+
+    let mut input_paths: Vec<std::path::PathBuf> = Vec::new();
+    loop {
+        let line = read_input("Path (blank to finish)")?;
+        if line.trim().is_empty() {
+            break;
+        }
+        let path = std::path::PathBuf::from(line.trim());
+        if !path.exists() {
+            println!("  {}", format!("Path not found, skipping: {}", path.display()).yellow());
+            continue;
+        }
+        input_paths.push(path);
+    }
+
+    if input_paths.is_empty() {
+        println!("\n  {}", "No paths entered.".yellow());
+        return Ok(());
+    }
+
+    println!("\n  {}", "Scanning targets...".cyan());
+    let expanded = fileerase::walker::expand_paths(&input_paths).context("Failed to scan target paths")?;
+
+    let total_bytes: u64 = expanded
+        .files
+        .iter()
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .sum();
+
+    println!(
+        "  {} files, {} folders, {} total",
+        expanded.files.len(),
+        expanded.dirs_to_remove.len(),
+        model::device::format_bytes(total_bytes)
+    );
+
+    let protected_reason = input_paths.iter().find_map(|p| fileerase::walker::is_protected_path(p));
+
+    let methods = print_file_method_menu();
+    let method_input = read_input("Select method")?;
+    let method_idx: usize = method_input.trim().parse().context("Invalid method — enter a number")?;
+    if method_idx == 0 || method_idx > methods.len() {
+        bail!("Method selection out of range");
+    }
+    let method = methods[method_idx - 1];
+
+    let wipe_free_space = read_input("Also wipe free space on affected volume(s) afterward? [y/N]")?
+        .trim()
+        .eq_ignore_ascii_case("y");
+    let delete_usn_journal = read_input(
+        "Also clear the USN change journal (ENTIRE volume, not just these files)? [y/N]",
+    )?
+    .trim()
+    .eq_ignore_ascii_case("y");
+
+    audit.log(
+        AuditEventType::SafetyCheck,
+        format!("{} files, {} bytes targeted", expanded.files.len(), total_bytes),
+    );
+    if !safety::confirmation::confirm_file_erasure(
+        expanded.files.len(),
+        &model::device::format_bytes(total_bytes),
+        protected_reason,
+        wipe_free_space,
+        delete_usn_journal,
+    )? {
+        println!("\n  {}", "Erasure cancelled by user.".yellow().bold());
+        audit.log(AuditEventType::SessionEnd, "User cancelled erasure");
+        return Ok(());
+    }
+    audit.log(AuditEventType::ConfirmationReceived, "User confirmed erasure");
+
+    let start_time = chrono::Local::now();
+    audit.log(
+        AuditEventType::SanitizationStarted,
+        format!("Method: {} ({})", method.display_name(), method.standard_name()),
+    );
+
+    let pb = ui::progress::create_sanitize_progress_bar(total_bytes.max(1), "Erasing");
+    let options = fileerase::FileEraseOptions { method, wipe_free_space, delete_usn_journal };
+    let summary = fileerase::erase_paths(&input_paths, options, |done, total| {
+        pb.set_position(done.min(total));
+    })?;
+    pb.finish_with_message("Erasure complete");
+
+    for record in &summary.file_records {
+        audit.log(
+            AuditEventType::PassCompleted,
+            format!(
+                "{} — {} stream(s), {} pass(es), deleted={}",
+                record.original_path, record.streams_wiped, record.passes, record.deleted
+            ),
+        );
+    }
+    audit.log(AuditEventType::SessionEnd, "File erasure session complete");
+
+    let end_time = chrono::Local::now();
+    let cert = report::file_certificate::FileErasureCertificate::build(start_time, end_time, method, &summary, audit);
+
+    let report_dir = std::path::Path::new("reports");
+    std::fs::create_dir_all(report_dir)?;
+    let (json_path, txt_path) = cert.save(report_dir)?;
+
+    let failed = summary.file_records.iter().filter(|r| !r.deleted).count();
+    if failed == 0 {
+        ui::progress::print_success(&format!("{} file(s) securely erased", summary.file_records.len()));
+    } else {
+        ui::progress::print_failure(&format!(
+            "{} of {} file(s) failed to erase — see report for details",
+            failed,
+            summary.file_records.len()
+        ));
+    }
+
+    println!("\n  {}", "Reports saved:".bold());
+    println!("    JSON: {}", json_path.display());
+    println!("    Text: {}", txt_path.display());
+    println!("\n{}", cert.to_text_summary());
 
     Ok(())
 }

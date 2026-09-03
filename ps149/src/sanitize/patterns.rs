@@ -36,6 +36,15 @@ pub enum SanitizeMethod {
     GostR50739,
     /// Smart Secure — critical zones + boundary breaks (~1 min)
     SmartSecure,
+    /// Hardware crypto-erase via IOCTL_STORAGE_REINITIALIZE_MEDIA — internal
+    /// NVMe only. Deliberately excluded from `all_methods()`: it's not a
+    /// pattern-overwrite method (no passes, no `FillPattern`), so it never
+    /// appears in the numbered method menu and is never routed through
+    /// `sanitize::execute_sanitization`/`get_pattern` below. It exists as a
+    /// variant purely so `sanitize::hardware_erase`'s result can reuse the
+    /// existing `SanitizationCertificate::build()` plumbing unchanged — see
+    /// `sanitize::hardware_erase` for the actual execution path.
+    NvmeCryptoErase,
 }
 
 impl SanitizeMethod {
@@ -46,6 +55,7 @@ impl SanitizeMethod {
             Self::Dod3Pass | Self::HmgIs5Enhanced | Self::Afssi5020 | Self::Ar38019 | Self::NavsoP523926 => 3,
             Self::Dod7Pass | Self::RcmpTssit | Self::Vsitr | Self::Schneier => 7,
             Self::Gutmann => 35,
+            Self::NvmeCryptoErase => 1,
         }
     }
 
@@ -68,6 +78,7 @@ impl SanitizeMethod {
             Self::Random1Pass => "Random Single Pass",
             Self::GostR50739 => "GOST R 50739-95 (2-Pass)",
             Self::SmartSecure => "Smart Secure Wipe (~1 min)",
+            Self::NvmeCryptoErase => "Hardware Fast Erase (NVMe Crypto Erase)",
         }
     }
 
@@ -90,6 +101,7 @@ impl SanitizeMethod {
             Self::Random1Pass => "Academic Consensus",
             Self::GostR50739 => "GOST R 50739-95 (Russia)",
             Self::SmartSecure => "PS-26149 Innovation (Zone-Based)",
+            Self::NvmeCryptoErase => "NIST SP 800-88 Purge (Hardware Crypto Erase)",
         }
     }
 
@@ -112,6 +124,7 @@ impl SanitizeMethod {
             Self::Random1Pass => "Single pass CSPRNG — modern academic consensus",
             Self::GostR50739 => "Russian Federal data protection standard",
             Self::SmartSecure => "Zones: metadata + boundaries — fast & unrecoverable",
+            Self::NvmeCryptoErase => "Drive controller resets its encryption key — seconds, internal NVMe only",
         }
     }
 
@@ -240,6 +253,10 @@ pub fn get_pattern(pass_index: usize, method: SanitizeMethod) -> FillPattern {
             // Passes 32-35: Random
             _ => FillPattern::Random,
         },
+        // Never actually invoked — NvmeCryptoErase bypasses the pattern-write
+        // pipeline entirely (see `sanitize::hardware_erase`). Arm exists only
+        // because `SanitizeMethod` match statements must stay exhaustive.
+        SanitizeMethod::NvmeCryptoErase => FillPattern::Fixed(0x00),
     }
 }
 

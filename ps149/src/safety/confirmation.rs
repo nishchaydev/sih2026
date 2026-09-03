@@ -59,3 +59,67 @@ pub fn confirm_erasure(disk: &PhysicalDisk) -> Result<bool> {
 
     Ok(true)
 }
+
+/// Confirmation flow for file/folder erasure. Same shape as
+/// `confirm_erasure`, but keyed on a file count/size instead of a disk, and
+/// escalates to a longer confirmation phrase when any target resolves under
+/// a protected system path (see `fileerase::walker::is_protected_path`).
+pub fn confirm_file_erasure(
+    file_count: usize,
+    total_size_display: &str,
+    protected_reason: Option<&str>,
+    wipe_free_space: bool,
+    delete_usn_journal: bool,
+) -> Result<bool> {
+    let warning_box = format!(
+        "╔══════════════════════════════════════════════════╗\n\
+         ║  WARNING: IRREVERSIBLE DESTRUCTIVE OPERATION     ║\n\
+         ╠══════════════════════════════════════════════════╣\n\
+         ║  Files: {:<43}║\n\
+         ║  Total size: {:<38}║\n\
+         ║                                                  ║\n\
+         ║  ALL DATA WILL BE PERMANENTLY DESTROYED.         ║\n\
+         ╚══════════════════════════════════════════════════╝",
+        file_count, total_size_display
+    );
+    println!("{}", warning_box.bright_red().bold());
+
+    if wipe_free_space {
+        println!(
+            "{}",
+            "  Free-space wipe is ENABLED — will also fill remaining free space on affected volume(s)."
+                .yellow()
+        );
+    }
+    if delete_usn_journal {
+        println!(
+            "{}",
+            "  USN journal clearing is ENABLED — this affects the ENTIRE volume, not just the selected files."
+                .yellow()
+        );
+    }
+
+    if let Some(reason) = protected_reason {
+        let danger_box = format!(
+            "╔══════════════════════════════════════════════════╗\n\
+             ║  DANGER: TARGET INCLUDES A PROTECTED SYSTEM PATH ║\n\
+             ╠══════════════════════════════════════════════════╣\n\
+             ║  Reason: {:<42}║\n\
+             ╚══════════════════════════════════════════════════╝",
+            reason
+        );
+        println!("{}", danger_box.on_red().white().bold());
+
+        print!("{}", "Type DELETE SYSTEM FILES to proceed: ".yellow().bold());
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        return Ok(input.trim() == "DELETE SYSTEM FILES");
+    }
+
+    print!("{}", "Type ERASE to proceed: ".yellow().bold());
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(input.trim() == "ERASE")
+}

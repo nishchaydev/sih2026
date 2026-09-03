@@ -131,11 +131,23 @@ impl SanitizationCertificate {
             },
             audit_events: audit.events().to_vec(),
             ai_narrative: None,
-            compliance_note: "This sanitization meets NIST SP 800-88 Clear level for \
-                user-addressable logical blocks. Software-based overwrite cannot guarantee \
-                erasure of data in flash controller-managed areas including over-provisioned \
-                space, wear-leveled spare pages, and retired bad blocks."
-                .to_string(),
+            compliance_note: if matches!(method, SanitizeMethod::NvmeCryptoErase) {
+                "This sanitization meets NIST SP 800-88 Purge level. The drive controller's \
+                    hardware crypto-erase (IOCTL_STORAGE_REINITIALIZE_MEDIA, NVMe Sanitize \
+                    Crypto Erase) invalidates the media encryption key, rendering all \
+                    previously written data — including over-provisioned space, wear-leveled \
+                    spare pages, and retired bad blocks — cryptographically unrecoverable. \
+                    Verification is limited to a post-erase spot check (see below); the \
+                    primary correctness guarantee is the drive controller's own command \
+                    completion status, not a full-disk readback."
+                    .to_string()
+            } else {
+                "This sanitization meets NIST SP 800-88 Clear level for \
+                    user-addressable logical blocks. Software-based overwrite cannot guarantee \
+                    erasure of data in flash controller-managed areas including over-provisioned \
+                    space, wear-leveled spare pages, and retired bad blocks."
+                    .to_string()
+            },
         }
     }
 

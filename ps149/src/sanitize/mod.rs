@@ -3,6 +3,7 @@ pub mod raw_io;
 pub mod patterns;
 pub mod pass;
 pub mod initialize;
+pub mod hardware_erase;
 
 use crate::model::device::PhysicalDisk;
 use patterns::SanitizeMethod;

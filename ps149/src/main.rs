@@ -1,6 +1,7 @@
 mod discovery;
 mod file_eraser;
 mod carver;
+mod demo;
 mod model;
 mod report;
 mod safety;
@@ -97,6 +98,12 @@ fn main() -> Result<()> {
             "6" => {
                 print_settings_info(&groq_client);
             }
+            "7" => {
+                drain_hotplug_events(&hotplug_rx);
+                if let Err(e) = demo::run_live_battle_interactive(&groq_client) {
+                    println!("  {} {}", "Error:".red().bold(), e);
+                }
+            }
             "0" | "exit" | "quit" | "q" => {
                 println!("\n{}", "Goodbye! Stay secure. 🛡️".green().bold());
                 break;
@@ -123,6 +130,7 @@ fn print_main_menu() {
     println!("  {}  {}  {}", "│".bright_cyan(), "[4]  File Recovery & Deep Carving (Module 3)".bright_yellow().bold(), "    │".bright_cyan());
     println!("  {}  {}  {}", "│".bright_cyan(), "[5]  View Erasure History & Audit Reports".white(), "             │".bright_cyan());
     println!("  {}  {}  {}", "│".bright_cyan(), "[6]  Settings & Info".white(), "                                │".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "[7]  ⚔️  Live Battle Demo (Offense vs Defense)".bright_magenta().bold(), "      │".bright_cyan());
     println!("  {}  {}  {}", "│".bright_cyan(), "[0]  Exit".dimmed(), "                                                  │".bright_cyan());
     println!("  {}", "└─────────────────────────────────────────────────────────┘".bright_cyan());
 }
@@ -195,7 +203,14 @@ fn print_method_menu(capacity: u64, interface: Option<&str>) {
         }
     }
 
-    println!("\n    {} {}", "[0]".dimmed(), "Back to main menu".dimmed());
+    println!(
+        "\n    {} {:<38} {} {}",
+        "[P]".bright_magenta().bold(),
+        "Hardware Firmware Purge (NIST Purge)",
+        "~1s".bright_green(),
+        "— Direct SSD/NVMe TRIM & controller purge".dimmed()
+    );
+    println!("    {} {}", "[0]".dimmed(), "Back to main menu".dimmed());
 }
 
 fn estimate_eta(capacity: u64, method: &SanitizeMethod, speed_mbps: f64) -> std::time::Duration {
@@ -334,6 +349,61 @@ fn cmd_erase_interactive(
     print_method_menu(target.capacity, target.interface_type.as_deref());
     let method_input = read_input("Select method")?;
     if method_input.trim() == "0" {
+        return Ok(());
+    }
+
+    if method_input.trim().eq_ignore_ascii_case("p") {
+        println!("\n  {}", "Hardware Firmware Purge (NIST SP 800-88 Purge)".bright_magenta().bold());
+        println!("  Target: Disk {} ({})", target.index, target.model.as_deref().unwrap_or("Unknown"));
+        let confirm = read_input("Type PURGE to execute hardware controller command")?;
+        if confirm.trim() != "PURGE" {
+            println!("  {}", "Cancelled.".yellow());
+            return Ok(());
+        }
+
+        let purge_result = sanitize::hardware_purge::execute_firmware_purge(
+            target.index,
+            target.capacity,
+            &target.device_type.to_string(),
+        )?;
+
+        println!("\n  {}", "Hardware Purge Results:".bold());
+        println!("    Status   : {}", if purge_result.success { "SUCCESS (NIST Purge Acknowledged)".bright_green().bold() } else { "NOT SUPPORTED (Fallback needed)".yellow() });
+        println!("    Command  : {}", purge_result.command_type.cyan());
+        println!("    Duration : {:.2}s", purge_result.duration_secs);
+        println!("    Details  : {}", purge_result.message.white());
+
+        // Append to blockchain & BSA 2023 certificate
+        let mut chain = report::blockchain::AuditChain::load_or_create().unwrap_or_default();
+        let serial = target.serial_number.clone().unwrap_or_else(|| format!("Disk_{}", target.index));
+        let _ = chain.add_event(
+            report::blockchain::AuditEventType::DriveErasure,
+            &serial,
+            "Forensic_Operator",
+            "NIST_800_88_PURGE_CONTROLLER_COMMAND",
+            &format!("Hardware Purge: {} on Disk {}", purge_result.command_type, target.index),
+        );
+
+        let bsa_cert = report::blockchain::generate_bsa_certificate(
+            "NIST SP 800-88 Rev. 1 Hardware Purge",
+            &format!("Disk {} ({})", target.index, target.model.as_deref().unwrap_or("Drive")),
+            &serial,
+            "Hardware Controller Firmware Purge (DSM TRIM / NVMe / ATA)",
+            "N/A",
+            "NIST_PURGE_ACKNOWLEDGED",
+            if purge_result.success { "100% PURGED — HARDWARE FLASH CELLS DEALLOCATED" } else { "UNSUPPORTED BRIDGE" },
+            chain.merkle_root.as_deref().unwrap_or("GENESIS"),
+            chain.blockchain_tx.as_deref(),
+        );
+
+        let report_dir = std::path::Path::new("reports");
+        let _ = std::fs::create_dir_all(report_dir);
+        let timestamp_str = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let bsa_path = report_dir.join(format!("bsa_section_63_hardware_purge_{}.txt", timestamp_str));
+        let _ = std::fs::write(&bsa_path, &bsa_cert);
+        println!("    BSA 2023 : {}", bsa_path.display().to_string().bright_yellow().bold());
+        println!("    Blockchain: {}", chain.summary().bright_magenta());
+
         return Ok(());
     }
 

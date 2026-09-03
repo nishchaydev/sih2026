@@ -127,7 +127,7 @@ pub fn all_signatures() -> Vec<FileSignature> {
             mime_type: "application/pdf",
             header: &[0x25, 0x50, 0x44, 0x46, 0x2D],  // %PDF-
             footer: Some(&[0x25, 0x25, 0x45, 0x4F, 0x46]),  // %%EOF
-            max_size: 500 * MB,
+            max_size: 100 * MB,
             min_size: 67,
             category: FileCategory::Document,
         },
@@ -137,7 +137,7 @@ pub fn all_signatures() -> Vec<FileSignature> {
             mime_type: "application/zip",
             header: &[0x50, 0x4B, 0x03, 0x04],  // PK\x03\x04
             footer: Some(&[0x50, 0x4B, 0x05, 0x06]),  // Central directory end
-            max_size: 2 * GB,
+            max_size: 100 * MB,
             min_size: 22,
             category: FileCategory::Archive,
         },
@@ -347,6 +347,14 @@ pub fn find_footer(data: &[u8], footer: &[u8]) -> Option<usize> {
     // Search from the END backwards for efficiency (footers are at the end)
     for i in (0..=(data.len() - footer.len())).rev() {
         if &data[i..i + footer.len()] == footer {
+            // Special handling for ZIP End of Central Directory (EOCD)
+            if footer == &[0x50, 0x4B, 0x05, 0x06] {
+                let eocd_fixed = i + 22;
+                if data.len() >= eocd_fixed {
+                    let comment_len = u16::from_le_bytes([data[i + 20], data[i + 21]]) as usize;
+                    return Some((eocd_fixed + comment_len).min(data.len()));
+                }
+            }
             return Some(i + footer.len());
         }
     }

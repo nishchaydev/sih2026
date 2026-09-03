@@ -79,57 +79,95 @@ pub fn carve_from_source(
         signatures.len()
     );
 
-    let scan_chunk = 4096u64; // Read 4KB at a time (sector-aligned)
+    let chunk_size: usize = 4 * 1024 * 1024; // 4 MB sequential batch read
     let mut position: u64 = 0;
-    let mut header_buf = vec![0u8; 4096];
+    let mut buffer = vec![0u8; chunk_size];
     let mut carved_files: Vec<CarvedFile> = Vec::new();
     let mut file_counter: usize = 0;
+    let sector_step = 512usize; // Check headers at sector boundaries
 
     while position < source_size {
-        let bytes_read = reader.read(&mut header_buf)?;
+        let bytes_to_read = std::cmp::min(chunk_size as u64, source_size - position) as usize;
+        let read_slice = &mut buffer[..bytes_to_read];
+        let mut bytes_read = 0;
+        while bytes_read < bytes_to_read {
+            let n = reader.read(&mut read_slice[bytes_read..])?;
+            if n == 0 {
+                break;
+            }
+            bytes_read += n;
+        }
+
         if bytes_read == 0 {
             break;
         }
 
-        // Check if this sector contains a known file header
-        if let Some(sig) = signatures::match_header(&header_buf[..bytes_read], &signatures) {
-            info!(
-                "Found {} header at offset 0x{:X} ({:.2} MB)",
-                sig.name,
-                position,
-                position as f64 / (1024.0 * 1024.0)
-            );
+        let current_chunk = &buffer[..bytes_read];
 
-            // Try to extract the complete file
-            match extract_file(&mut reader, sig, position, source_size, output_dir, file_counter) {
-                Ok(carved) => {
-                    info!(
-                        "Carved: {} ({} bytes, confidence: {:.0}%)",
-                        carved.output_path, carved.size, carved.confidence * 100.0
-                    );
-                    carved_files.push(carved);
-                    file_counter += 1;
-                }
-                Err(e) => {
-                    warn!("Failed to extract {} at offset 0x{:X}: {}", sig.name, position, e);
-                }
-            }
-
-            // Seek back to continue scanning after the header
-            // (we might have read ahead during extraction)
-            reader.seek(SeekFrom::Start(position + scan_chunk))?;
-        }
-
-        position += scan_chunk;
-
-        // Progress callback every 10 MB
-        if position % (10 * 1024 * 1024) == 0 {
+        // ── Fast Zero-Skip in RAM ───────────────────────────────
+        // If this 4 MB chunk is all 0x00 (typical on CCTV drives where large
+        // sections of deleted recordings are wiped or empty), skip it instantly!
+        if is_all_zeros(current_chunk) {
+            position += bytes_read as u64;
             progress_callback(CarvingProgress {
                 bytes_scanned: position,
                 total_bytes: source_size,
                 files_found: carved_files.len(),
             });
+            continue;
         }
+
+        // ── In-Memory Sector Scan ──────────────────────────────
+        let mut offset = 0usize;
+        while offset < bytes_read {
+            let sector_slice = &current_chunk[offset..];
+            if let Some(sig) = signatures::match_header(sector_slice, &signatures) {
+                let abs_offset = position + offset as u64;
+                info!(
+                    "Found {} header at offset 0x{:X} ({:.2} MB)",
+                    sig.name,
+                    abs_offset,
+                    abs_offset as f64 / (1024.0 * 1024.0)
+                );
+
+                match extract_file(&mut reader, sig, abs_offset, source_size, output_dir, file_counter) {
+                    Ok(carved) => {
+                        info!(
+                            "Carved: {} ({} bytes, confidence: {:.0}%)",
+                            carved.output_path, carved.size, carved.confidence * 100.0
+                        );
+                        let file_size = carved.size as usize;
+                        carved_files.push(carved);
+                        file_counter += 1;
+
+                        // Skip forward past this carved file
+                        let advance_sectors = ((file_size + sector_step - 1) / sector_step) * sector_step;
+                        offset += advance_sectors;
+                        let new_abs = position + offset as u64;
+                        if new_abs < source_size {
+                            let _ = reader.seek(SeekFrom::Start(new_abs));
+                        }
+                        continue;
+                    }
+                    Err(e) => {
+                        warn!("Failed to extract {} at offset 0x{:X}: {}", sig.name, abs_offset, e);
+                        // Reset reader position to after the current buffer
+                        let _ = reader.seek(SeekFrom::Start(position + bytes_read as u64));
+                    }
+                }
+            }
+
+            offset += sector_step;
+        }
+
+        position += bytes_read as u64;
+        let _ = reader.seek(SeekFrom::Start(position));
+
+        progress_callback(CarvingProgress {
+            bytes_scanned: position,
+            total_bytes: source_size,
+            files_found: carved_files.len(),
+        });
     }
 
     // Build category counts
@@ -169,7 +207,7 @@ fn extract_file(
 
     // Determine how much data to read (bounded by max_size and source_size)
     let max_read = std::cmp::min(sig.max_size, source_size - offset);
-    let read_chunk = 64 * 1024; // 64 KB read chunks for extraction
+    let read_chunk = 512 * 1024; // 512 KB chunks for high-throughput USB/disk reads
     let mut file_data: Vec<u8> = Vec::with_capacity(std::cmp::min(max_read as usize, 10 * 1024 * 1024));
     let mut total_read: u64 = 0;
 
@@ -186,10 +224,11 @@ fn extract_file(
         file_data.extend_from_slice(&chunk[..bytes_read]);
         total_read += bytes_read as u64;
 
-        // If we have a footer, check if we've found it
+        // If we have a footer, check if we've found it (search only the newly read window + overlap)
         if let Some(footer) = sig.footer {
-            if let Some(end_pos) = signatures::find_footer(&file_data, footer) {
-                file_data.truncate(end_pos);
+            let search_start = file_data.len().saturating_sub(bytes_read + footer.len() + 64);
+            if let Some(rel_pos) = signatures::find_footer(&file_data[search_start..], footer) {
+                file_data.truncate(search_start + rel_pos);
                 break;
             }
         }
@@ -289,6 +328,15 @@ fn calculate_shannon_entropy(data: &[u8]) -> f64 {
         }
     }
     entropy
+}
+
+/// Fast SIMD/64-bit word check to determine if a memory chunk is entirely 0x00.
+#[inline]
+pub fn is_all_zeros(data: &[u8]) -> bool {
+    let (prefix, chunks, suffix) = unsafe { data.align_to::<u64>() };
+    prefix.iter().all(|&b| b == 0)
+        && chunks.iter().all(|&w| w == 0)
+        && suffix.iter().all(|&b| b == 0)
 }
 
 // ── Source reader abstraction ───────────────────────────────

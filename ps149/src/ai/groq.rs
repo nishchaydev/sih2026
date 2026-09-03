@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
 const GROQ_API_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
-const DEFAULT_MODEL: &str = "llama-3.3-70b-versatile";
+const DEFAULT_MODEL: &str = "gpt-oss-120b";
 
 /// Groq API client for AI-powered features.
 pub struct GroqClient {

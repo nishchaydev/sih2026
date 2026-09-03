@@ -9,6 +9,7 @@ use patterns::SanitizeMethod;
 use pass::{PassResult, SanitizeProgress};
 use serde::Serialize;
 use std::time::Instant;
+use tracing::info;
 
 #[derive(Debug, Serialize)]
 pub struct SanitizeResult {
@@ -23,11 +24,18 @@ pub fn execute_sanitization(
     progress_callback: impl Fn(SanitizeProgress),
 ) -> anyhow::Result<SanitizeResult> {
     let start_time = Instant::now();
+
+    info!(
+        "Device: {} | Type: {} | Capacity: {}",
+        disk.model.as_deref().unwrap_or("Unknown"),
+        disk.device_type,
+        disk.capacity_display()
+    );
     
     // CRITICAL: _guard holds the volume lock handles open.
     // If dropped early, the OS re-mounts the filesystem and raw writes hang.
     let _guard = volume_ops::lock_and_dismount_volumes(disk)?;
-    let handle = raw_io::open_disk_write(disk.index)?;
+    let handle = raw_io::open_disk_write(disk.index, &disk.device_type)?;
     
     let total_passes = method.pass_count();
     let mut passes = Vec::new();
@@ -42,6 +50,7 @@ pub fn execute_sanitization(
             pass_index,
             total_passes,
             method,
+            &disk.device_type,
             &progress_callback,
         )?;
         passes.push(result);
@@ -57,3 +66,4 @@ pub fn execute_sanitization(
         total_duration: start_time.elapsed(),
     })
 }
+

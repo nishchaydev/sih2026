@@ -1,5 +1,6 @@
 mod discovery;
 mod file_eraser;
+mod carver;
 mod model;
 mod report;
 mod safety;
@@ -83,11 +84,17 @@ fn main() -> Result<()> {
                 }
             }
             "4" => {
-                if let Err(e) = cmd_view_history() {
+                drain_hotplug_events(&hotplug_rx);
+                if let Err(e) = cmd_file_recovery_interactive(&groq_client) {
                     println!("  {} {}", "Error:".red().bold(), e);
                 }
             }
             "5" => {
+                if let Err(e) = cmd_view_history() {
+                    println!("  {} {}", "Error:".red().bold(), e);
+                }
+            }
+            "6" => {
                 print_settings_info(&groq_client);
             }
             "0" | "exit" | "quit" | "q" => {
@@ -113,8 +120,9 @@ fn print_main_menu() {
     println!("  {}  {}  {}", "│".bright_cyan(), "[1]  List Connected Storage Devices".white(), "               │".bright_cyan());
     println!("  {}  {}  {}", "│".bright_cyan(), "[2]  Erase an Entire Drive (Module 1)".white(), "                   │".bright_cyan());
     println!("  {}  {}  {}", "│".bright_cyan(), "[3]  Secure File & Folder Shredder (Module 2)".bright_green().bold(), "   │".bright_cyan());
-    println!("  {}  {}  {}", "│".bright_cyan(), "[4]  View Erasure History & Audit Reports".white(), "             │".bright_cyan());
-    println!("  {}  {}  {}", "│".bright_cyan(), "[5]  Settings & Info".white(), "                                │".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "[4]  File Recovery & Deep Carving (Module 3)".bright_yellow().bold(), "    │".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "[5]  View Erasure History & Audit Reports".white(), "             │".bright_cyan());
+    println!("  {}  {}  {}", "│".bright_cyan(), "[6]  Settings & Info".white(), "                                │".bright_cyan());
     println!("  {}  {}  {}", "│".bright_cyan(), "[0]  Exit".dimmed(), "                                                  │".bright_cyan());
     println!("  {}", "└─────────────────────────────────────────────────────────┘".bright_cyan());
 }
@@ -524,9 +532,39 @@ fn cmd_erase_interactive(
     std::fs::create_dir_all(report_dir)?;
     let (json_path, txt_path) = cert.save(report_dir)?;
 
-    println!("\n  {}", "Reports saved:".bold());
-    println!("    JSON: {}", json_path.display());
-    println!("    Text: {}", txt_path.display());
+    // Blockchain Audit Trail & BSA 2023 Section 63 Certificate
+    let mut chain = report::blockchain::AuditChain::load_or_create().unwrap_or_default();
+    let serial = target.serial_number.clone().unwrap_or_else(|| format!("Disk_{}", target.index));
+    let device_display = format!("Disk {} ({})", target.index, target.model.as_deref().unwrap_or("Drive"));
+    let desc = format!("Erase disk {} with {}", target.index, cert.sanitization.method);
+    let _ = chain.add_event(
+        report::blockchain::AuditEventType::DriveErasure,
+        &serial,
+        "Forensic_Operator",
+        &cert.verification.disk_hash_sha256,
+        &desc,
+    );
+
+    let bsa_cert = report::blockchain::generate_bsa_certificate(
+        &format!("Sanitization & Purge ({})", cert.sanitization.method),
+        &device_display,
+        &serial,
+        &cert.sanitization.method,
+        "N/A",
+        &cert.verification.disk_hash_sha256,
+        &cert.verification.result,
+        chain.merkle_root.as_deref().unwrap_or("GENESIS"),
+        chain.blockchain_tx.as_deref(),
+    );
+    let timestamp_str = cert.timestamp_start.format("%Y%m%d_%H%M%S");
+    let bsa_path = report_dir.join(format!("bsa_section_63_certificate_{}.txt", timestamp_str));
+    let _ = std::fs::write(&bsa_path, &bsa_cert);
+
+    println!("\n  {}", "Reports & Evidence Certificates saved:".bold().bright_green());
+    println!("    JSON Certificate : {}", json_path.display().to_string().cyan());
+    println!("    Text Certificate : {}", txt_path.display().to_string().cyan());
+    println!("    BSA 2023 Sec 63  : {}", bsa_path.display().to_string().bright_yellow().bold());
+    println!("    Blockchain Audit : {}", chain.summary().bright_magenta());
     println!("\n{}", cert.to_text_summary());
 
     // Phase 7: Post-Sanitization Drive Re-initialization & Format (Optional)
@@ -1130,50 +1168,368 @@ fn wipe_volume_free_space(_groq_client: &Option<ai::groq::GroqClient>) -> Result
 }
 
 fn cmd_view_history() -> Result<()> {
-    println!("\n  {}", "Erasure & Forensic Audit History".bold());
-    println!("  {}", "─".repeat(50).dimmed());
+    println!("\n  {}", "Erasure & Forensic Audit History (Blockchain-Backed)".bold());
+    println!("  {}", "─".repeat(60).dimmed());
+
+    // Show Blockchain status
+    let chain = report::blockchain::AuditChain::load_or_create().unwrap_or_default();
+    println!("  {} {}", "⛓".to_string().bright_magenta(), chain.summary().bright_white().bold());
+    println!("  {}", "─".repeat(60).dimmed());
 
     let report_dir = std::path::Path::new("reports");
-    if !report_dir.exists() {
-        println!("  {}", "No reports generated yet (directory 'reports/' is empty).".dimmed());
-        return Ok(());
-    }
-
     let mut reports = Vec::new();
-    for entry in std::fs::read_dir(report_dir)?.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("txt") {
-            reports.push(path);
+    if report_dir.exists() {
+        for entry in std::fs::read_dir(report_dir)?.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("txt") || path.extension().and_then(|s| s.to_str()) == Some("json") {
+                reports.push(path);
+            }
         }
-    }
-
-    if reports.is_empty() {
-        println!("  {}", "No audit reports found in 'reports/'.".dimmed());
-        return Ok(());
     }
 
     reports.sort_by(|a, b| b.cmp(a));
 
-    for (i, r) in reports.iter().take(15).enumerate() {
-        let name = r.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        let meta = std::fs::metadata(r)?;
-        let size = meta.len();
-        println!("    [{}] {:<45} ({} bytes)", i + 1, name, size);
+    if reports.is_empty() {
+        println!("  {}", "No audit reports found in 'reports/' yet.".dimmed());
+    } else {
+        println!("  {}", "Available Certificates & Audit Logs:".bold());
+        for (i, r) in reports.iter().take(12).enumerate() {
+            let name = r.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let is_bsa = name.starts_with("bsa_");
+            let is_json = name.ends_with(".json");
+            let label = if is_bsa {
+                format!("[{}] {}", i + 1, name).bright_yellow().bold()
+            } else if is_json {
+                format!("[{}] {}", i + 1, name).dimmed()
+            } else {
+                format!("[{}] {}", i + 1, name).white()
+            };
+            println!("    {:<55}", label);
+        }
     }
 
-    let choice = read_input("Enter report number to view, or 0 to return")?;
-    if choice.trim() == "0" || choice.trim().is_empty() {
+    println!();
+    println!("    {} Verify Blockchain Hash Chain & Merkle Integrity", "[V]".bright_magenta().bold());
+    println!("    {} Inspect Raw Blockchain Ledger (All Blocks)", "[B]".cyan().bold());
+    println!("    {} Return to Main Menu", "[0]".dimmed());
+
+    let choice = read_input("Enter option or report number to view")?;
+    let choice_trimmed = choice.trim();
+
+    match choice_trimmed {
+        "0" | "" => return Ok(()),
+        "v" | "V" => {
+            println!("\n  {} Verifying Blockchain Audit Chain...", "🔍".to_string().bright_magenta());
+            let (valid, total, invalid_idx) = chain.verify();
+            println!("  {}", "═".repeat(50).bright_magenta());
+            if valid {
+                println!("  {} Blockchain Chain Integrity: {}", "✓".bright_green().bold(), "PERFECT — 0 TAMPERING DETECTED".bright_green().bold());
+                println!("    Verified Entries : {}", total.to_string().cyan());
+                println!("    Merkle Root Hash : {}", chain.merkle_root.as_deref().unwrap_or("N/A").bright_yellow());
+                println!("    Status           : Legally Tamper-Proof under BSA 2023 §63");
+            } else {
+                println!("  {} Blockchain Chain Integrity: {}", "✗".red().bold(), "CORRUPTED OR TAMPERED!".red().bold());
+                println!("    First Invalid Block Index : {:?}", invalid_idx);
+            }
+            println!("  {}", "═".repeat(50).bright_magenta());
+        }
+        "b" | "B" => {
+            println!("\n  {}", "Blockchain Audit Trail Ledger:".bold().bright_magenta());
+            println!("  {}", "─".repeat(65).dimmed());
+            if chain.entries.is_empty() {
+                println!("    (No blocks recorded yet)");
+            } else {
+                for entry in &chain.entries {
+                    println!(
+                        "    [Block #{}] {} | {} | Op: {}...",
+                        entry.index.to_string().bright_white(),
+                        entry.event_type.to_string().cyan(),
+                        entry.device_id.yellow(),
+                        &entry.operation_hash[..8],
+                    );
+                    println!(
+                        "      Prev Hash : {}...",
+                        &entry.prev_hash[..16].dimmed(),
+                    );
+                    println!(
+                        "      Block Hash: {}...",
+                        &entry.entry_hash[..16].bright_green(),
+                    );
+                }
+            }
+            println!("  {}", "─".repeat(65).dimmed());
+        }
+        _ => {
+            if let Ok(idx) = choice_trimmed.parse::<usize>() {
+                if idx > 0 && idx <= reports.len() {
+                    let content = std::fs::read_to_string(&reports[idx - 1])?;
+                    println!("\n{}", "─".repeat(65).cyan());
+                    println!("{}", content);
+                    println!("{}", "─".repeat(65).cyan());
+                } else {
+                    println!("  {}", "Invalid report number.".yellow());
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ─── Module 3: File Recovery & Deep Carving ──────────────────────────
+
+fn cmd_file_recovery_interactive(groq: &Option<ai::groq::GroqClient>) -> Result<()> {
+    println!("\n  {}", "┌────────────────────────────────────────────────────┐".bright_yellow());
+    println!("  {}  {}  {}", "│".bright_yellow(), "Module 3: File Recovery & Deep Carving".bold().bright_white(), "        │".bright_yellow());
+    println!("  {}", "├────────────────────────────────────────────────────┤".bright_yellow());
+    println!("  {}  {}  {}", "│".bright_yellow(), "[1] Carve from Physical Drive".white(), "                    │".bright_yellow());
+    println!("  {}  {}  {}", "│".bright_yellow(), "[2] Carve from Volume (D:, E:, ...)".white(), "              │".bright_yellow());
+    println!("  {}  {}  {}", "│".bright_yellow(), "[3] Carve from Disk Image (.dd, .raw, .img)".white(), "     │".bright_yellow());
+    println!("  {}  {}  {}", "│".bright_yellow(), "[0] Back to Main Menu".dimmed(), "                            │".bright_yellow());
+    println!("  {}", "└────────────────────────────────────────────────────┘".bright_yellow());
+
+    let choice = read_input("Select recovery source")?;
+
+    let (source_path, source_size, source_display) = match choice.trim() {
+        "1" => {
+            // Carve from physical drive
+            let disks = discovery::enumerate_devices()?;
+            if disks.is_empty() {
+                println!("  {}", "No storage devices found.".yellow());
+                return Ok(());
+            }
+            println!("\n  {}", "Connected Drives:".bold());
+            for disk in &disks {
+                println!(
+                    "    {} Disk {} — {} | {} | {}",
+                    "●".bright_cyan(),
+                    disk.index,
+                    disk.model.as_deref().unwrap_or("Unknown").bright_white(),
+                    disk.capacity_display().yellow(),
+                    disk.device_type.to_string().dimmed(),
+                );
+            }
+
+            let idx_str = read_input("Enter disk number to carve from")?;
+            let idx: u32 = idx_str.parse().context("Invalid disk number")?;
+
+            let disk = disks.iter().find(|d| d.index == idx)
+                .ok_or_else(|| anyhow::anyhow!("Disk {} not found", idx))?;
+
+            if disk.is_boot_disk {
+                println!("  {} Cannot carve from boot disk while Windows is running.", "⚠".red().bold());
+                println!("    Use a disk image instead.");
+                return Ok(());
+            }
+
+            let path = format!("\\\\.\\PhysicalDrive{}", idx);
+            let size = disk.capacity;
+            let display = format!("Disk {} — {}", idx, disk.model.as_deref().unwrap_or("Unknown"));
+            (path, size, display)
+        }
+        "2" => {
+            // Carve from volume
+            let letter = read_input("Enter volume letter (e.g. D)")?;
+            let letter = letter.trim().trim_end_matches(':').to_uppercase();
+            let path = format!("\\\\.\\{}:", letter);
+            // Estimate size from volume
+            let size_str = read_input("Approximate volume size in GB (e.g. 32)")?;
+            let size_gb: u64 = size_str.parse().unwrap_or(16);
+            let display = format!("Volume {}:", letter);
+            (path, size_gb * 1024 * 1024 * 1024, display)
+        }
+        "3" => {
+            // Carve from disk image
+            let path_str = read_input("Enter path to disk image file")?;
+            let path = clean_path(&path_str);
+            if !path.exists() {
+                bail!("File not found: {:?}", path);
+            }
+            let size = std::fs::metadata(&path)?.len();
+            let display = format!("Image: {}", path.file_name().unwrap_or_default().to_string_lossy());
+            (path.to_string_lossy().to_string(), size, display)
+        }
+        "0" | "" => return Ok(()),
+        _ => {
+            println!("  {}", "Invalid option.".yellow());
+            return Ok(());
+        }
+    };
+
+    // Display carving info
+    println!("\n  {}", "┌──────────────────────────────────────────┐".bright_yellow());
+    println!("  {}  {}: {}  {}", "│".bright_yellow(), "Source".bold(), source_display.bright_white(), "│".bright_yellow());
+    println!("  {}  {}: {}  {}", "│".bright_yellow(), "Size".bold(), model::device::format_bytes(source_size).yellow(), "│".bright_yellow());
+    println!("  {}  {}: {}  {}", "│".bright_yellow(), "Signatures".bold(), format!("{} file types", carver::all_signatures().len()).cyan(), "│".bright_yellow());
+    println!("  {}", "└──────────────────────────────────────────┘".bright_yellow());
+
+    // Ask for output directory
+    let default_output = format!("recovered_artifacts");
+    let output_str = read_input(&format!("Output directory [{}]", default_output))?;
+    let output_dir = if output_str.trim().is_empty() {
+        std::path::PathBuf::from(&default_output)
+    } else {
+        clean_path(&output_str)
+    };
+
+    // Confirmation
+    println!("\n  {} File carving will {}.", "⚠".yellow().bold(), "READ the source (non-destructive)".bright_green().bold());
+    println!("    Recovered files will be saved to: {}", output_dir.display().to_string().cyan());
+    let confirm = read_input("Type RECOVER to begin")?;
+    if confirm.trim() != "RECOVER" {
+        println!("  {}", "Cancelled.".yellow());
         return Ok(());
     }
 
-    if let Ok(idx) = choice.trim().parse::<usize>() {
-        if idx > 0 && idx <= reports.len() {
-            let content = std::fs::read_to_string(&reports[idx - 1])?;
-            println!("\n{}", "─".repeat(60).cyan());
-            println!("{}", content);
-            println!("{}", "─".repeat(60).cyan());
+    // Run the carving engine with progress display
+    println!("\n  {} Starting deep scan...\n", "🔍".to_string().bright_yellow());
+
+    let pb = indicatif::ProgressBar::new(source_size);
+    pb.set_style(
+        indicatif::ProgressStyle::default_bar()
+            .template("  Scan [{bar:40.yellow/dim}]  {percent}% | {bytes}/{total_bytes} | Files: {msg}")
+            .unwrap()
+            .progress_chars("█▓░"),
+    );
+
+    let start = std::time::Instant::now();
+    let result = carver::carve_from_source(
+        &source_path,
+        &output_dir,
+        Some(source_size),
+        |progress| {
+            pb.set_position(progress.bytes_scanned);
+            pb.set_message(format!("{}", progress.files_found));
+        },
+    )?;
+
+    pb.finish_with_message(format!("{} files", result.files_found));
+    let elapsed = start.elapsed();
+
+    // Display results
+    println!("\n  {}", "═".repeat(60).bright_yellow());
+    println!("  {} {}", "CARVING RESULTS".bold().bright_yellow(), "═".repeat(43).bright_yellow());
+    println!("  {}", "═".repeat(60).bright_yellow());
+
+    println!("\n  {} Files Recovered: {}", "📁".to_string(), result.files_found.to_string().bright_green().bold());
+    println!("  {} Data Scanned: {}", "💾".to_string(), model::device::format_bytes(result.total_bytes_scanned).cyan());
+    println!("  {} Duration: {:.1}s", "⏱".to_string(), elapsed.as_secs_f64());
+
+    if !result.categories.is_empty() {
+        println!("\n  {} {}", "Categories:".bold(), "");
+        for (cat, count) in &result.categories {
+            println!("    {} {}: {}", "●".bright_cyan(), cat, count.to_string().bright_green());
         }
     }
+
+    if !result.carved_files.is_empty() {
+        println!("\n  {} {}", "Recovered Files:".bold(), "");
+        for (i, cf) in result.carved_files.iter().enumerate().take(50) {
+            println!(
+                "    {}. {} | {} | {} | Confidence: {:.0}%",
+                (i + 1).to_string().dimmed(),
+                cf.file_type.bright_white(),
+                model::device::format_bytes(cf.size).yellow(),
+                format!("SHA256: {}...", &cf.sha256[..12]).dimmed(),
+                cf.confidence * 100.0,
+            );
+        }
+        if result.carved_files.len() > 50 {
+            println!("    ... and {} more files", result.carved_files.len() - 50);
+        }
+    } else {
+        println!("\n  {} {}", "ℹ".bright_cyan(), "No recoverable files found. The drive may have been securely wiped.".dimmed());
+    }
+
+    // Save carving report as JSON
+    let report_dir = std::path::PathBuf::from("reports");
+    std::fs::create_dir_all(&report_dir)?;
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let report_path = report_dir.join(format!("carving_report_{}.json", timestamp));
+    let report_json = serde_json::to_string_pretty(&result)?;
+    std::fs::write(&report_path, &report_json)?;
+
+    // Blockchain Audit Trail & BSA 2023 Sec 63 Evidence Certificate
+    let mut chain = report::blockchain::AuditChain::load_or_create().unwrap_or_default();
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(report_json.as_bytes());
+    let op_hash = format!("{:x}", hasher.finalize());
+
+    let _ = chain.add_event(
+        report::blockchain::AuditEventType::FileCarving,
+        &source_display,
+        "Forensic_Investigator",
+        &op_hash,
+        &format!("Carved {} files from {}", result.files_found, source_display),
+    );
+
+    let bsa_carve_cert = report::blockchain::generate_bsa_certificate(
+        "Forensic File Carving & Evidence Extraction",
+        &source_display,
+        "N/A",
+        "Deep Sector Signature & Structure Parsing",
+        "N/A",
+        &op_hash,
+        &format!("Extracted {} verified file artifacts", result.files_found),
+        chain.merkle_root.as_deref().unwrap_or("GENESIS"),
+        chain.blockchain_tx.as_deref(),
+    );
+    let bsa_carve_path = report_dir.join(format!("bsa_section_63_recovery_{}.txt", timestamp));
+    let _ = std::fs::write(&bsa_carve_path, &bsa_carve_cert);
+
+    println!("\n  {}", "Reports & Evidence Certificates saved:".bold().bright_green());
+    println!("    JSON Report      : {}", report_path.display().to_string().cyan());
+    println!("    BSA 2023 Sec 63  : {}", bsa_carve_path.display().to_string().bright_yellow().bold());
+    println!("    Blockchain Audit : {}", chain.summary().bright_magenta());
+
+    // AI forensic narrative
+    if let Some(client) = groq {
+        println!("\n  {} Generating AI forensic narrative...", "🤖".to_string().bright_cyan());
+
+        let summary = if result.files_found > 0 {
+            format!(
+                "A forensic file carving scan of '{}' ({}) recovered {} files across {} categories. \
+                 Files found: {}. Duration: {:.1}s. SHA-256 hashes computed for all artifacts.",
+                source_display,
+                model::device::format_bytes(source_size),
+                result.files_found,
+                result.categories.len(),
+                result.carved_files.iter().take(10).map(|f| format!("{} ({})", f.file_type, model::device::format_bytes(f.size))).collect::<Vec<_>>().join(", "),
+                elapsed.as_secs_f64(),
+            )
+        } else {
+            format!(
+                "A forensic file carving scan of '{}' ({}) found 0 recoverable files after scanning {} bytes in {:.1}s. \
+                 This indicates the storage media has been effectively sanitized with no residual data artifacts detectable \
+                 through signature-based or structure-based carving analysis.",
+                source_display,
+                model::device::format_bytes(source_size),
+                result.total_bytes_scanned,
+                elapsed.as_secs_f64(),
+            )
+        };
+
+        let system_prompt = "You are a certified digital forensics expert and court-admissible technical witness. \
+            Generate a brief, professional forensic analysis statement suitable for inclusion in an investigation report \
+            under Bharatiya Sakshya Adhiniyam 2023, Section 63. Be precise and use forensic terminology.";
+
+        match client.chat(system_prompt, &summary) {
+            Ok(narrative) => {
+                println!("\n  {}", "AI Forensic Analysis:".bold().bright_cyan());
+                println!("  {}", "─".repeat(55).dimmed());
+                for line in narrative.lines() {
+                    println!("  {}", line.bright_white());
+                }
+                println!("  {}", "─".repeat(55).dimmed());
+            }
+            Err(e) => {
+                println!("  {} AI narrative unavailable: {}", "⚠".yellow(), e.to_string().dimmed());
+            }
+        }
+    }
+
+    println!("\n  {} Output directory: {}", "📂".to_string(), output_dir.display().to_string().bright_green().bold());
 
     Ok(())
 }

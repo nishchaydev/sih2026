@@ -1,4 +1,6 @@
+use crate::model::device_type::DeviceType;
 use anyhow::Result;
+use tracing::info;
 use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::Foundation::{
     CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
@@ -36,18 +38,27 @@ impl DiskHandle {
     }
 }
 
-/// Opens a physical disk for writing.
+/// Opens a physical disk for writing with I/O flags tuned to the device type.
 ///
-/// Opens a physical disk for writing with maximum throughput.
-///
-/// No special I/O flags — the OS can pipeline writes through the USB
-/// controller's buffer, batch I/O requests, and manage the transfer
-/// asynchronously. This gives 5-15x better throughput on USB drives.
-///
-/// Data integrity is guaranteed by:
-/// 1. `FlushFileBuffers()` after all writes (forces to physical media)
-/// 2. Verification read-back with `FILE_FLAG_NO_BUFFERING` (bypasses cache)
-pub fn open_disk_write(disk_index: u32) -> Result<DiskHandle> {
+/// - **USB Flash / SD cards**: `FILE_FLAG_WRITE_THROUGH` — prevents Windows
+///   from buffering GBs in RAM (causes 50% stall on slow flash controllers).
+/// - **HDDs / SSDs / NVMe / others**: No flags (buffered I/O) — lets the
+///   drive's internal cache pipeline writes for 3-4x higher throughput.
+///   `FlushFileBuffers()` after all passes guarantees data reaches media.
+pub fn open_disk_write(disk_index: u32, device_type: &DeviceType) -> Result<DiskHandle> {
+    let needs_write_through = matches!(
+        device_type,
+        DeviceType::UsbFlashDrive | DeviceType::SdCard
+    );
+
+    let flags = if needs_write_through {
+        info!("I/O mode: WRITE_THROUGH (flash device — prevents dirty page stall)");
+        FILE_FLAGS_AND_ATTRIBUTES(FILE_FLAG_WRITE_THROUGH.0)
+    } else {
+        info!("I/O mode: Buffered (HDD/SSD — maximum throughput, flush at end)");
+        FILE_FLAGS_AND_ATTRIBUTES(0)
+    };
+
     let path = format!("\\\\.\\PhysicalDrive{}", disk_index);
     let hstring = HSTRING::from(path);
     let handle = unsafe {
@@ -57,9 +68,7 @@ pub fn open_disk_write(disk_index: u32) -> Result<DiskHandle> {
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             None,
             OPEN_EXISTING,
-            // Direct write-through to prevent Windows OS from buffering gigabytes in RAM
-            // and freezing when the slow USB controller cannot keep up.
-            FILE_FLAGS_AND_ATTRIBUTES(FILE_FLAG_WRITE_THROUGH.0),
+            flags,
             None,
         )
     }?;

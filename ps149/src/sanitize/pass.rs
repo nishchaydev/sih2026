@@ -1,3 +1,4 @@
+use crate::model::device_type::DeviceType;
 use crate::sanitize::patterns::FillPattern;
 use crate::sanitize::raw_io::{DiskHandle, seek_to_sector};
 use serde::Serialize;
@@ -24,6 +25,18 @@ pub struct SanitizeProgress {
     pub work_completed_sectors: u64, // Actual sectors read/written
 }
 
+/// Returns optimal write buffer size tuned per device class.
+/// - Flash drives: 1 MB (prevents Windows dirty-page stall at ~50% RAM)
+/// - HDDs: 8 MB (fewer syscalls, mechanical heads stay in sequential mode)
+/// - SSDs/NVMe/others: 4 MB (good balance for NAND controllers)
+fn optimal_buffer_size(device_type: &DeviceType) -> u32 {
+    match device_type {
+        DeviceType::UsbFlashDrive | DeviceType::SdCard | DeviceType::Emmc => 1_048_576, // 1 MB
+        DeviceType::InternalHdd | DeviceType::ExternalHdd => 8_388_608,                  // 8 MB
+        _ => 4_194_304,                                                                   // 4 MB
+    }
+}
+
 pub fn write_pass(
     handle: &DiskHandle,
     pattern: &FillPattern,
@@ -32,11 +45,18 @@ pub fn write_pass(
     pass_index: usize,
     total_passes: usize,
     method: crate::sanitize::patterns::SanitizeMethod,
+    device_type: &DeviceType,
     progress_callback: &impl Fn(SanitizeProgress),
 ) -> anyhow::Result<PassResult> {
     let start_time = Instant::now();
-    let buf_size: u32 = 1_048_576; // 1 MB — optimal for USB/SCSI, responsive progress updates
+    let buf_size = optimal_buffer_size(device_type);
     let sectors_per_chunk = (buf_size / bytes_per_sector) as u64;
+
+    info!(
+        "I/O engine: {} MB buffer (tuned for {})",
+        buf_size / 1_048_576,
+        device_type
+    );
 
     let mut buf = vec![0u8; buf_size as usize];
 
